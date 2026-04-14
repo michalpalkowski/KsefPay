@@ -1,10 +1,5 @@
 mod queries;
 
-// Keep old files for backward compat during migration, will remove after
-pub mod invoice_repo;
-pub mod job_queue;
-pub mod session_repo;
-
 use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::Mutex;

@@ -21,10 +21,7 @@ use ksef_core::domain::job::{Job, JobId, JobStatus};
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::session::{KSeFNumber, SessionReference};
 use ksef_core::error::RepositoryError;
-use ksef_core::infra::pg::invoice_repo::PgInvoiceRepo;
-use ksef_core::infra::pg::job_queue::PgJobQueue;
-use ksef_core::infra::pg::run_migrations;
-use ksef_core::infra::pg::session_repo::PgSessionRepo;
+use ksef_core::infra::pg::{Db, run_migrations};
 use ksef_core::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use ksef_core::ports::job_queue::JobQueue;
 use ksef_core::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
@@ -213,7 +210,7 @@ fn make_stored_session(env: KSeFEnvironment) -> StoredSession {
 #[tokio::test]
 async fn invoice_save_and_find_by_id() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
@@ -238,7 +235,7 @@ async fn invoice_save_and_find_by_id() {
 #[tokio::test]
 async fn invoice_save_and_find_by_id_mobile_payment_method() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let mut invoice = sample_invoice();
     invoice.payment_method = Some(PaymentMethod::Mobile);
@@ -251,7 +248,7 @@ async fn invoice_save_and_find_by_id_mobile_payment_method() {
 #[tokio::test]
 async fn invoice_find_by_id_not_found() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let missing_id = InvoiceId::new();
     let err = repo.find_by_id(&missing_id).await.unwrap_err();
@@ -261,7 +258,7 @@ async fn invoice_find_by_id_not_found() {
 #[tokio::test]
 async fn invoice_save_duplicate_returns_error() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let invoice = sample_invoice();
     repo.save(&invoice).await.unwrap();
@@ -272,7 +269,7 @@ async fn invoice_save_duplicate_returns_error() {
 #[tokio::test]
 async fn invoice_update_status_changes_status() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
@@ -288,7 +285,7 @@ async fn invoice_update_status_changes_status() {
 #[tokio::test]
 async fn invoice_update_status_not_found() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let err = repo
         .update_status(&InvoiceId::new(), InvoiceStatus::Queued)
@@ -300,7 +297,7 @@ async fn invoice_update_status_not_found() {
 #[tokio::test]
 async fn invoice_set_ksef_number_persists() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
@@ -314,7 +311,7 @@ async fn invoice_set_ksef_number_persists() {
 #[tokio::test]
 async fn invoice_set_ksef_error_persists() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
@@ -330,7 +327,7 @@ async fn invoice_set_ksef_error_persists() {
 #[tokio::test]
 async fn invoice_set_ksef_number_not_found() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let err = repo
         .set_ksef_number(&InvoiceId::new(), "KSeF-999")
@@ -342,7 +339,7 @@ async fn invoice_set_ksef_number_not_found() {
 #[tokio::test]
 async fn invoice_set_ksef_error_not_found() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let err = repo
         .set_ksef_error(&InvoiceId::new(), "oops")
@@ -354,7 +351,7 @@ async fn invoice_set_ksef_error_not_found() {
 #[tokio::test]
 async fn invoice_list_filters_by_direction() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let mut outgoing = sample_invoice();
     outgoing.direction = Direction::Outgoing;
@@ -376,7 +373,7 @@ async fn invoice_list_filters_by_direction() {
 #[tokio::test]
 async fn invoice_list_filters_by_status() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let inv1 = sample_invoice();
     let id1 = repo.save(&inv1).await.unwrap();
@@ -399,7 +396,7 @@ async fn invoice_list_filters_by_status() {
 #[tokio::test]
 async fn invoice_list_with_limit_and_offset() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     for _ in 0..5 {
         repo.save(&sample_invoice()).await.unwrap();
@@ -417,7 +414,7 @@ async fn invoice_list_with_limit_and_offset() {
 #[tokio::test]
 async fn invoice_list_empty_returns_empty() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let result = repo.list(&InvoiceFilter::default()).await.unwrap();
     assert!(result.is_empty());
@@ -426,7 +423,7 @@ async fn invoice_list_empty_returns_empty() {
 #[tokio::test]
 async fn invoice_list_filters_by_seller_nip() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let invoice = sample_invoice();
     repo.save(&invoice).await.unwrap();
@@ -454,7 +451,7 @@ async fn invoice_list_filters_by_seller_nip() {
 #[tokio::test]
 async fn invoice_ksef_number_unique_constraint() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     let mut inv1 = sample_invoice();
     inv1.ksef_number = Some(KSeFNumber::new("KSeF-UNIQUE-001".to_string()));
@@ -478,7 +475,7 @@ async fn invoice_ksef_number_unique_constraint() {
 #[tokio::test]
 async fn invoice_null_ksef_numbers_are_not_unique() {
     let pool = isolated_pool().await;
-    let repo = PgInvoiceRepo::new(pool);
+    let repo = Db::new(pool);
 
     // Two invoices with ksef_number = NULL should both succeed (NULL != NULL).
     let inv1 = sample_invoice();
@@ -495,7 +492,7 @@ async fn invoice_null_ksef_numbers_are_not_unique() {
 #[tokio::test]
 async fn job_enqueue_then_dequeue_returns_job() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let job = make_job("submit_invoice");
     let id = queue.enqueue(job).await.unwrap();
@@ -508,7 +505,7 @@ async fn job_enqueue_then_dequeue_returns_job() {
 #[tokio::test]
 async fn job_dequeue_empty_returns_none() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     assert!(queue.dequeue().await.unwrap().is_none());
 }
@@ -516,7 +513,7 @@ async fn job_dequeue_empty_returns_none() {
 #[tokio::test]
 async fn job_complete_marks_completed() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let job = make_job("submit_invoice");
     let id = queue.enqueue(job).await.unwrap();
@@ -532,7 +529,7 @@ async fn job_complete_marks_completed() {
 #[tokio::test]
 async fn job_fail_increments_attempts() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool.clone());
+    let queue = Db::new(pool.clone());
 
     let job = make_job("submit_invoice");
     let id = queue.enqueue(job).await.unwrap();
@@ -558,7 +555,7 @@ async fn job_fail_increments_attempts() {
 #[tokio::test]
 async fn job_fail_after_max_attempts_dead_letters() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let mut job = make_job("submit_invoice");
     job.max_attempts = 2;
@@ -577,7 +574,7 @@ async fn job_fail_after_max_attempts_dead_letters() {
 #[tokio::test]
 async fn job_dead_letter_explicit() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let job = make_job("submit_invoice");
     let id = queue.enqueue(job).await.unwrap();
@@ -592,7 +589,7 @@ async fn job_dead_letter_explicit() {
 #[tokio::test]
 async fn job_operations_on_missing_job_return_error() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let missing = JobId::new();
     assert!(queue.complete(&missing).await.is_err());
@@ -603,7 +600,7 @@ async fn job_operations_on_missing_job_return_error() {
 #[tokio::test]
 async fn job_dequeue_skips_non_pending() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let job1 = make_job("job1");
     let id1 = queue.enqueue(job1).await.unwrap();
@@ -620,7 +617,7 @@ async fn job_dequeue_skips_non_pending() {
 #[tokio::test]
 async fn job_list_pending_filters_correctly() {
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     queue.enqueue(make_job("pending1")).await.unwrap();
     queue.enqueue(make_job("pending2")).await.unwrap();
@@ -649,15 +646,15 @@ async fn job_dequeue_skip_locked_concurrent() {
     let pool = isolated_pool().await;
 
     // Enqueue two jobs
-    let queue = PgJobQueue::new(pool.clone());
+    let queue = Db::new(pool.clone());
     let job_a = make_job("concurrent_a");
     let id_a = queue.enqueue(job_a).await.unwrap();
     let job_b = make_job("concurrent_b");
     let id_b = queue.enqueue(job_b).await.unwrap();
 
     // Dequeue both concurrently from two instances sharing the same pool
-    let queue_1 = PgJobQueue::new(pool.clone());
-    let queue_2 = PgJobQueue::new(pool.clone());
+    let queue_1 = Db::new(pool.clone());
+    let queue_2 = Db::new(pool.clone());
 
     let (result_1, result_2) = tokio::join!(queue_1.dequeue(), queue_2.dequeue());
 
@@ -688,7 +685,7 @@ async fn job_dequeue_returns_none_when_all_consumed() {
     // If there is only one pending job and it has already been dequeued,
     // a second dequeue should return None.
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool);
+    let queue = Db::new(pool);
 
     let job = make_job("only_one");
     queue.enqueue(job).await.unwrap();
@@ -706,7 +703,7 @@ async fn job_dequeue_returns_none_when_all_consumed() {
 async fn job_fail_applies_exponential_backoff() {
     // After a fail, the scheduled_at should be pushed into the future.
     let pool = isolated_pool().await;
-    let queue = PgJobQueue::new(pool.clone());
+    let queue = Db::new(pool.clone());
 
     let job = make_job("backoff_test");
     let id = queue.enqueue(job).await.unwrap();
@@ -737,7 +734,7 @@ async fn job_fail_applies_exponential_backoff() {
 #[tokio::test]
 async fn session_save_and_find_active_token() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let token = make_stored_token(KSeFEnvironment::Test);
     repo.save_token_pair(&token).await.unwrap();
@@ -755,7 +752,7 @@ async fn session_save_and_find_active_token() {
 #[tokio::test]
 async fn session_find_active_token_wrong_env_returns_none() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let token = make_stored_token(KSeFEnvironment::Test);
     repo.save_token_pair(&token).await.unwrap();
@@ -770,7 +767,7 @@ async fn session_find_active_token_wrong_env_returns_none() {
 #[tokio::test]
 async fn session_expired_refresh_token_not_returned() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let mut token = make_stored_token(KSeFEnvironment::Test);
     token.token_pair = TokenPair {
@@ -791,7 +788,7 @@ async fn session_expired_refresh_token_not_returned() {
 #[tokio::test]
 async fn session_save_and_find_active_session() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let session = make_stored_session(KSeFEnvironment::Test);
     let expected_ref = session.session_reference.as_str().to_string();
@@ -808,7 +805,7 @@ async fn session_save_and_find_active_session() {
 #[tokio::test]
 async fn session_terminated_session_not_active() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let session = make_stored_session(KSeFEnvironment::Test);
     let session_id = session.id;
@@ -826,7 +823,7 @@ async fn session_terminated_session_not_active() {
 #[tokio::test]
 async fn session_terminate_missing_session_returns_error() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let err = repo.terminate_session(Uuid::new_v4()).await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -835,7 +832,7 @@ async fn session_terminate_missing_session_returns_error() {
 #[tokio::test]
 async fn session_find_active_session_wrong_env_returns_none() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let session = make_stored_session(KSeFEnvironment::Test);
     repo.save_session(&session).await.unwrap();
@@ -854,7 +851,7 @@ async fn session_find_active_session_wrong_env_returns_none() {
 #[tokio::test]
 async fn session_reference_unique_constraint() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let session = make_stored_session(KSeFEnvironment::Test);
     repo.save_session(&session).await.unwrap();
@@ -872,7 +869,7 @@ async fn session_reference_unique_constraint() {
 #[tokio::test]
 async fn session_terminate_already_terminated_returns_not_found() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     let session = make_stored_session(KSeFEnvironment::Test);
     let session_id = session.id;
@@ -888,7 +885,7 @@ async fn session_terminate_already_terminated_returns_not_found() {
 #[tokio::test]
 async fn session_multiple_tokens_returns_latest() {
     let pool = isolated_pool().await;
-    let repo = PgSessionRepo::new(pool);
+    let repo = Db::new(pool);
 
     // Save an older token
     let mut old_token = make_stored_token(KSeFEnvironment::Test);
