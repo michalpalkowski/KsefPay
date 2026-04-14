@@ -15,12 +15,6 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        match dotenvy::dotenv() {
-            Ok(_) => {}
-            Err(dotenvy::Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(format!("failed to load .env: {err}")),
-        }
-
         let database_url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL not set")?;
 
         let server_host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());

@@ -1691,7 +1691,6 @@ dependencies = [
  "askama",
  "axum",
  "chrono",
- "dotenvy",
  "ksef-core",
  "reqwest",
  "serde",

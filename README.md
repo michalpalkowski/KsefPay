@@ -105,6 +105,7 @@ _.file = ".env"
 ```
 
 Po jednorazowym `mise trust` zmienne z `.env` będą automatycznie dostępne w shellu po wejściu do katalogu projektu (podobnie do `direnv`).
+Jeśli nie używasz hooka shella do `mise`, uruchamiaj komendy przez `mise exec -- ...`.
 
 ### 3) Uruchom lokalny PostgreSQL i przygotuj bazę
 
@@ -178,7 +179,7 @@ cargo run -p ksef-core --example gen_nip
 ### 5) Uruchom serwer
 
 ```sh
-cargo run -p ksef-server
+mise exec -- cargo run -p ksef-server
 ```
 
 Dashboard: `http://localhost:3000`  
