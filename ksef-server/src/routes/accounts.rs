@@ -6,8 +6,10 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::Utc;
 use serde::Deserialize;
 
+use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
+use ksef_core::infra::ksef::TestDataClient;
 
 use crate::extractors::AuthUser;
 use crate::state::AppState;
@@ -184,6 +186,27 @@ pub async fn add(
             );
         }
     };
+
+    // On test/demo: register NIP on KSeF sandbox (idempotent, best-effort)
+    if state.ksef_environment != KSeFEnvironment::Production {
+        let client = TestDataClient::new(state.ksef_environment);
+        match client.setup_test_subject(&account.nip).await {
+            Ok((subject, perms)) => {
+                tracing::info!(
+                    nip = %account.nip,
+                    ?subject,
+                    ?perms,
+                    "registered NIP on KSeF sandbox"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    nip = %account.nip,
+                    "sandbox registration failed (non-fatal): {e}"
+                );
+            }
+        }
+    }
 
     // Grant access to the current user
     if let Err(e) = state

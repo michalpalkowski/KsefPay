@@ -179,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
     let mut worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
 
     let app_state = AppState {
+        ksef_environment: config.ksef_environment,
         user_repo: db.user_repo.clone(),
         nip_account_repo: db.nip_account_repo.clone(),
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::user_repository::UserRepository;
 use ksef_core::services::batch_service::BatchService;
@@ -20,6 +21,7 @@ pub type ExportKeyStore = Arc<Mutex<HashMap<String, (Vec<u8>, Vec<u8>)>>>;
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct AppState {
+    pub ksef_environment: KSeFEnvironment,
     pub user_repo: Arc<dyn UserRepository>,
     pub nip_account_repo: Arc<dyn NipAccountRepository>,
     pub invoice_service: Arc<InvoiceService>,
