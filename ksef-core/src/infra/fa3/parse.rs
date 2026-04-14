@@ -532,6 +532,21 @@ mod tests {
     }
 
     #[test]
+    fn accepts_qualified_reverse_charge_vat_rate() {
+        let wiersz = r#"<FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>x</P_7><P_8B>1</P_8B><P_9A>100.00</P_9A><P_11>100.00</P_11><P_12>np I</P_12></FaWiersz>"#;
+        let xml = build_minimal_xml(wiersz, "100.00");
+        let invoice = xml_to_invoice(
+            &InvoiceXml::new(xml),
+            Direction::Incoming,
+            &KSeFNumber::new("KSeF-X".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(invoice.line_items[0].vat_rate, VatRate::ReverseCharge);
+        assert_eq!(invoice.line_items[0].vat_amount, Money::from_grosze(0));
+    }
+
+    #[test]
     fn rejects_invalid_optional_sale_date_when_present() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">

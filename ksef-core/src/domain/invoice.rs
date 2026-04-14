@@ -383,7 +383,31 @@ impl FromStr for VatRate {
     type Err = DomainError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim() {
+        let normalized = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized_lower = normalized.to_ascii_lowercase();
+
+        let parse_qualified_code = || -> Option<Result<Self, DomainError>> {
+            let mut parts = normalized_lower.split_whitespace();
+            let code = parts.next()?;
+            let qualifier = parts.next()?;
+            if parts.next().is_some() {
+                return Some(Err(DomainError::InvalidVatRate(normalized.clone())));
+            }
+
+            if !qualifier.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Some(Err(DomainError::InvalidVatRate(normalized.clone())));
+            }
+
+            let mapped = match code {
+                "zw" => Self::Exempt,
+                "oo" => Self::NotSubject,
+                "np" => Self::ReverseCharge,
+                _ => return Some(Err(DomainError::InvalidVatRate(normalized.clone()))),
+            };
+            Some(Ok(mapped))
+        };
+
+        match normalized_lower.as_str() {
             "23" => Ok(Self::Rate23),
             "8" => Ok(Self::Rate8),
             "7" => Ok(Self::Rate7),
@@ -393,8 +417,9 @@ impl FromStr for VatRate {
             "0" => Ok(Self::Rate0),
             "zw" | "exempt" => Ok(Self::Exempt),
             "oo" => Ok(Self::NotSubject),
-            "np" | "0 KR" => Ok(Self::ReverseCharge),
-            other => Err(DomainError::InvalidVatRate(other.to_string())),
+            "np" | "0 kr" => Ok(Self::ReverseCharge),
+            // Some KSeF documents include an additional qualifier, e.g. "np I".
+            _ => parse_qualified_code().unwrap_or(Err(DomainError::InvalidVatRate(normalized))),
         }
     }
 }
@@ -1107,6 +1132,20 @@ mod tests {
     fn vat_rate_invalid_string_returns_error() {
         assert!("99".parse::<VatRate>().is_err());
         assert!("".parse::<VatRate>().is_err());
+    }
+
+    #[test]
+    fn vat_rate_accepts_qualified_non_numeric_codes() {
+        assert_eq!("np I".parse::<VatRate>().unwrap(), VatRate::ReverseCharge);
+        assert_eq!("ZW A".parse::<VatRate>().unwrap(), VatRate::Exempt);
+        assert_eq!("oo x".parse::<VatRate>().unwrap(), VatRate::NotSubject);
+    }
+
+    #[test]
+    fn vat_rate_rejects_invalid_qualified_non_numeric_codes() {
+        assert!("np I A".parse::<VatRate>().is_err());
+        assert!("np <x>".parse::<VatRate>().is_err());
+        assert!("zw ???".parse::<VatRate>().is_err());
     }
 
     // --- Money ---
