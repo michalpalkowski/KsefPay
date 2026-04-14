@@ -78,30 +78,87 @@ Zbiorczy eksport faktur z KSeF za wybrany okres — przydatne do archiwizacji al
 
 **Validated against real KSeF** — full E2E flow tested on `api-test.ksef.mf.gov.pl`.
 
-## Quick start
+## Quick start (bez Docker Compose)
+
+Uruchamiamy lokalnie przez `cargo run`, a konfigurację trzymamy w `.env` (z automatycznym ładowaniem przez `mise`).
+
+### 1) Skonfiguruj env
 
 ```sh
-# 1. Start PostgreSQL
-docker compose up -d
-
-# 2. Generate a test NIP (or use your own)
-cargo run -p ksef-core --example gen_nip
-# → 4583009462
-
-# 3. Create .env
 cp .env.example .env
-# Set KSEF_NIP to your generated NIP
-
-# 4. Run
-cargo run -p ksef-server
-# Dashboard at http://localhost:3000
-# Certificate auto-generated for test/demo environments
 ```
 
-Minimum `.env`:
+W `.env` ustaw przynajmniej:
+
 ```
 DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef
-KSEF_NIP=4583009462
+KSEF_NIP=5260250274 (Ministerstwo Finansów) 
+```
+
+### 2) Włącz automatyczne ładowanie `.env` przez mise
+
+W repo jest `mise.toml`:
+
+```toml
+[env]
+_.file = ".env"
+```
+
+Po jednorazowym `mise trust` zmienne z `.env` będą automatycznie dostępne w shellu po wejściu do katalogu projektu (podobnie do `direnv`).
+
+### 3) Uruchom lokalny PostgreSQL i przygotuj bazę
+
+Uruchom usługę PostgreSQL (bez `docker compose`), np.:
+
+```sh
+# macOS (Homebrew)
+brew services start postgresql@17 || brew services start postgresql
+
+# Linux (systemd)
+sudo systemctl start postgresql
+```
+
+Utwórz użytkownika i bazę zgodne z domyślnym `DATABASE_URL` z `.env.example`:
+
+```sh
+psql -d postgres <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ksef') THEN
+    CREATE ROLE ksef LOGIN PASSWORD 'ksef';
+  END IF;
+END
+$$;
+ALTER ROLE ksef WITH LOGIN PASSWORD 'ksef';
+SQL
+
+createdb -O ksef ksef 2>/dev/null || true
+psql "postgres://ksef:ksef@localhost:5432/ksef" -c "select 1;"
+```
+
+### 4) Wygeneruj testowy NIP (opcjonalnie)
+
+```sh
+cargo run -p ksef-core --example gen_nip
+# → 4583009462
+```
+
+### 5) Uruchom serwer
+
+```sh
+cargo run -p ksef-server
+```
+
+Dashboard: `http://localhost:3000`  
+Migracje uruchamiają się automatycznie przy starcie.  
+Certyfikat jest auto-generowany dla środowisk `test` i `demo`.
+
+### Opcjonalnie: PostgreSQL przez Docker Compose
+
+Jeśli chcesz, możesz nadal postawić samą bazę przez:
+
+```sh
+docker compose up -d postgres
 ```
 
 ### KSeF sandbox setup
@@ -140,7 +197,7 @@ See [docs/test-cert-howto.md](docs/test-cert-howto.md) for details.
 # Unit tests (~148 tests, no dependencies)
 cargo test -p ksef-core --lib
 
-# PostgreSQL integration tests (needs Docker)
+# PostgreSQL integration tests (needs PostgreSQL running)
 cargo test -p ksef-core --test pg_integration
 
 # KSeF sandbox E2E (needs network + cert)
