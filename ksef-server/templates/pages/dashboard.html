@@ -1,7 +1,7 @@
 {% extends "layouts/app.html" %}
 
 {% block head %}
-<title>KSeF PayMoney - Dashboard</title>
+<title>KSeF Pay - Dashboard</title>
 {% endblock %}
 
 {% block content %}
@@ -35,8 +35,10 @@
   </div>
 
   <div class="dashboard-actions">
-    <a href="/invoices/new" class="btn btn-primary">Nowa faktura</a>
-    <a href="/invoices" class="btn btn-secondary">Lista faktur</a>
+    {% if let Some(nip) = nip_prefix %}
+    <a href="/accounts/{{ nip }}/invoices/new" class="btn btn-primary">Nowa faktura</a>
+    <a href="/accounts/{{ nip }}/invoices" class="btn btn-secondary">Lista faktur</a>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

@@ -2,7 +2,7 @@
 {% import "macros/alerts.html" as alerts %}
 
 {% block head %}
-<title>Tokeny - KSeF PayMoney</title>
+<title>Tokeny - KSeF Pay</title>
 {% endblock %}
 
 {% block content %}
@@ -18,7 +18,7 @@
 
 <div class="page-card">
   <h2>Wygeneruj nowy token</h2>
-  <form method="post" action="/tokens/generate" class="form-stack" id="token-form">
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/generate" class="form-stack" id="token-form">
     <input type="hidden" name="permissions" id="permissions-value" value="InvoiceRead" />
     <div class="form-group">
       <label>Uprawnienia</label>
@@ -97,7 +97,7 @@
         <td>{{ t.created_at.format("%Y-%m-%d %H:%M") }}</td>
         <td>{{ t.expires_at.format("%Y-%m-%d %H:%M") }}</td>
         <td>
-          <form method="post" action="/tokens/{{ t.id }}/revoke" style="display:inline" onsubmit="return confirm('Uniewazniony token nie moze byc przywrocony. Kontynuowac?')">
+          <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/{{ t.id }}/revoke" style="display:inline" onsubmit="return confirm('Uniewazniony token nie moze byc przywrocony. Kontynuowac?')">
             <button type="submit" class="btn btn-danger btn-sm">Uniewaznij</button>
           </form>
         </td>

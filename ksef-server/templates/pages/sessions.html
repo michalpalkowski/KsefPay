@@ -2,7 +2,7 @@
 {% import "macros/alerts.html" as alerts %}
 
 {% block head %}
-<title>Sesje - KSeF PayMoney</title>
+<title>Sesje - KSeF Pay</title>
 {% endblock %}
 
 {% block content %}
@@ -38,15 +38,17 @@
   </p>
 
   <div class="actions">
-    <form method="post" action="/sessions/authenticate">
+    {% if let Some(nip) = nip_prefix %}
+    <form method="post" action="/accounts/{{ nip }}/sessions/authenticate">
       <button type="submit" class="btn btn-primary">
         {% if has_token %}Odnow token{% else %}Uwierzytelnij{% endif %}
       </button>
     </form>
     {% if has_session %}
-    <form method="post" action="/sessions/close" onsubmit="return confirm('Czy na pewno chcesz zamknac sesje online?')">
+    <form method="post" action="/accounts/{{ nip }}/sessions/close" onsubmit="return confirm('Czy na pewno chcesz zamknac sesje online?')">
       <button type="submit" class="btn btn-danger">Zamknij sesje online</button>
     </form>
+    {% endif %}
     {% endif %}
   </div>
 </div>

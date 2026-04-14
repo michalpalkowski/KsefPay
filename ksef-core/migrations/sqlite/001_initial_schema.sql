@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     ksef_number TEXT UNIQUE,
     ksef_error TEXT,
     raw_xml TEXT,
+    nip_account_id TEXT REFERENCES nip_accounts(id),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -69,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_seller_nip ON invoices(seller_nip);
 CREATE INDEX IF NOT EXISTS idx_invoices_buyer_nip ON invoices(buyer_nip);
 CREATE INDEX IF NOT EXISTS idx_invoices_direction ON invoices(direction);
 CREATE INDEX IF NOT EXISTS idx_invoices_invoice_type ON invoices(invoice_type);
+CREATE INDEX IF NOT EXISTS idx_invoices_nip_account ON invoices(nip_account_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
@@ -79,6 +81,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempts INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 3,
     last_error TEXT,
+    nip TEXT,
     scheduled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     started_at TEXT,
     completed_at TEXT,

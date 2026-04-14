@@ -12,12 +12,15 @@ use serde::Deserialize;
 
 use ksef_core::domain::session::{InvoiceQuery, SubjectType};
 
+use crate::extractors::NipContext;
 use crate::state::AppState;
 
 #[derive(Template)]
 #[template(path = "pages/export.html")]
 struct ExportTemplate {
     active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
     error: Option<String>,
     result: Option<ExportResultDisplay>,
     default_date_from: String,
@@ -67,10 +70,12 @@ fn status_display(status: ksef_core::domain::export::ExportStatus) -> (String, S
     }
 }
 
-fn form_error(error: String) -> Response {
+fn form_error(nip_prefix: String, user_email: String, error: String) -> Response {
     let (def_from, def_to) = default_dates();
     render(ExportTemplate {
         active: "/export",
+        nip_prefix: Some(nip_prefix),
+        user_email,
         error: Some(error),
         result: None,
         default_date_from: def_from,
@@ -85,10 +90,12 @@ pub struct ExportFormData {
     pub subject_type: String,
 }
 
-pub async fn export_page() -> Response {
+pub async fn export_page(nip_ctx: NipContext) -> Response {
     let (from, to) = default_dates();
     render(ExportTemplate {
         active: "/export",
+        nip_prefix: Some(nip_ctx.account.nip.to_string()),
+        user_email: nip_ctx.user.email,
         error: None,
         result: None,
         default_date_from: from,
@@ -98,24 +105,29 @@ pub async fn export_page() -> Response {
 
 pub async fn start_export(
     State(state): State<AppState>,
+    nip_ctx: NipContext,
     Form(form): Form<ExportFormData>,
 ) -> Response {
+    let nip = &nip_ctx.account.nip;
+    let nip_str = nip.to_string();
+    let user_email = nip_ctx.user.email;
+
     let date_from = match NaiveDate::parse_from_str(&form.date_from, "%Y-%m-%d") {
         Ok(d) => d,
-        Err(e) => return form_error(format!("Data od: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Data od: {e}")),
     };
     let date_to = match NaiveDate::parse_from_str(&form.date_to, "%Y-%m-%d") {
         Ok(d) => d,
-        Err(e) => return form_error(format!("Data do: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Data do: {e}")),
     };
     let subject_type: SubjectType = match form.subject_type.parse() {
         Ok(s) => s,
-        Err(e) => return form_error(format!("Typ podmiotu: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Typ podmiotu: {e}")),
     };
 
-    let token = match state.session_service.ensure_token(&state.nip).await {
+    let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
-        Err(e) => return form_error(format!("Brak tokenu dostepu: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostepu: {e}")),
     };
 
     let query = InvoiceQuery {
@@ -126,7 +138,9 @@ pub async fn start_export(
 
     let job = match state.export_service.start(&token, query).await {
         Ok(j) => j,
-        Err(e) => return form_error(format!("Eksport nie powiodl sie: {e}")),
+        Err(e) => {
+            return form_error(nip_str, user_email, format!("Eksport nie powiodl sie: {e}"));
+        }
     };
 
     // Store encryption key for later download
@@ -155,6 +169,8 @@ pub async fn start_export(
                 .contains_key(&completed.reference_number);
             render(ExportTemplate {
                 active: "/export",
+                nip_prefix: Some(nip_str),
+                user_email,
                 error: None,
                 result: Some(ExportResultDisplay {
                     reference: completed.reference_number,
@@ -170,6 +186,8 @@ pub async fn start_export(
         }
         Err(_) => render(ExportTemplate {
             active: "/export",
+            nip_prefix: Some(nip_str),
+            user_email,
             error: None,
             result: Some(ExportResultDisplay {
                 reference: job.reference_number,
@@ -187,21 +205,29 @@ pub async fn start_export(
 
 pub async fn check_status(
     State(state): State<AppState>,
-    Path(reference): Path<String>,
+    nip_ctx: NipContext,
+    Path((_nip, reference)): Path<(String, String)>,
 ) -> Response {
-    let token = match state.session_service.ensure_token(&state.nip).await {
+    let nip = &nip_ctx.account.nip;
+    let nip_str = nip.to_string();
+    let user_email = nip_ctx.user.email;
+
+    let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
-        Err(e) => return form_error(format!("Brak tokenu dostepu: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostepu: {e}")),
     };
 
     let (def_from, def_to) = default_dates();
     match state.export_service.get_status(&token, &reference).await {
         Ok(job) => {
             let (status_text, status_class) = status_display(job.status);
-            let is_pending = matches!(job.status, ksef_core::domain::export::ExportStatus::Pending);
+            let is_pending =
+                matches!(job.status, ksef_core::domain::export::ExportStatus::Pending);
             let has_key = state.export_keys.lock().unwrap().contains_key(&reference);
             render(ExportTemplate {
                 active: "/export",
+                nip_prefix: Some(nip_str),
+                user_email,
                 error: None,
                 result: Some(ExportResultDisplay {
                     reference: job.reference_number,
@@ -215,12 +241,22 @@ pub async fn check_status(
                 default_date_to: def_to,
             })
         }
-        Err(e) => form_error(format!("Sprawdzenie statusu nie powiodlo sie: {e}")),
+        Err(e) => form_error(
+            nip_str,
+            user_email,
+            format!("Sprawdzenie statusu nie powiodlo sie: {e}"),
+        ),
     }
 }
 
 /// Download the export file, decrypt it, and serve as plain ZIP.
-pub async fn download(State(state): State<AppState>, Path(reference): Path<String>) -> Response {
+pub async fn download(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    Path((_nip, reference)): Path<(String, String)>,
+) -> Response {
+    let nip = &nip_ctx.account.nip;
+
     let (key, iv) = match state.export_keys.lock().unwrap().get(&reference) {
         Some((k, i)) => (k.clone(), i.clone()),
         None => {
@@ -232,7 +268,7 @@ pub async fn download(State(state): State<AppState>, Path(reference): Path<Strin
         }
     };
 
-    let token = match state.session_service.ensure_token(&state.nip).await {
+    let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
         Err(e) => {
             return (

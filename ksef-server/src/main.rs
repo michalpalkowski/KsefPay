@@ -5,10 +5,13 @@ use std::{future::IntoFuture, pin::pin};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tower_http::services::ServeDir;
+use tower_sessions::Expiry;
+use tower_sessions::SessionManagerLayer;
+use tower_sessions::cookie::time::Duration as CookieDuration;
 use tracing_subscriber::EnvFilter;
 
 use ksef_core::infra::batch::zip_builder::BatchFileBuilder;
-use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslXadesSigner};
+use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslSignerFactory, OpenSslXadesSigner};
 use ksef_core::infra::fa3::Fa3XmlConverter;
 use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
@@ -27,6 +30,7 @@ use ksef_core::workers::job_worker::JobWorker;
 
 mod config;
 mod db_backend;
+mod extractors;
 mod routes;
 mod state;
 
@@ -95,7 +99,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(TokenBucketRateLimiter::default()),
         RetryPolicy::default(),
     ));
-    let signer = Arc::new(load_signer(&config)?);
+    // Fallback signer for backward compat (uses KSEF_NIP from env if set)
+    let fallback_signer = Arc::new(load_signer(&config)?);
+    let signer_factory = Arc::new(OpenSslSignerFactory);
     let auth_method = match config.ksef_auth_method.trim().to_ascii_lowercase().as_str() {
         "xades" => AuthMethod::Xades,
         "token" => {
@@ -113,9 +119,11 @@ async fn main() -> anyhow::Result<()> {
             ));
         }
     };
-    let session_service = Arc::new(SessionService::with_auth_method(
+    let session_service = Arc::new(SessionService::with_signer_factory(
         ksef.clone(),
-        signer,
+        fallback_signer,
+        signer_factory,
+        db.nip_account_repo.clone(),
         ksef.clone(),
         db.session_repo.clone(),
         config.ksef_environment,
@@ -171,7 +179,9 @@ async fn main() -> anyhow::Result<()> {
     let mut worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
 
     let app_state = AppState {
-        nip: config.ksef_nip,
+        ksef_environment: config.ksef_environment,
+        user_repo: db.user_repo.clone(),
+        nip_account_repo: db.nip_account_repo.clone(),
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         invoice_service,
         fetch_service,
@@ -184,12 +194,34 @@ async fn main() -> anyhow::Result<()> {
         qr_service,
     };
 
-    let app = routes::router()
+    // Session store — type differs per backend so we build the final app in each branch.
+    // Axum 0.8's Router::layer erases the layer type, so both branches produce Router<()>.
+    let base_router = routes::router()
         .nest_service(
             "/assets",
             ServeDir::new(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")),
         )
         .with_state(app_state);
+
+    let app: axum::Router = match db.kind {
+        db_backend::DatabaseBackendKind::Sqlite => {
+            let pool = sqlx::SqlitePool::connect(&config.database_url).await?;
+            let session_store = tower_sessions_sqlx_store::SqliteStore::new(pool);
+            session_store.migrate().await?;
+            let session_layer = SessionManagerLayer::new(session_store)
+                .with_expiry(Expiry::OnInactivity(CookieDuration::days(7)));
+            base_router.layer(session_layer)
+        }
+        db_backend::DatabaseBackendKind::Postgres => {
+            let pool = sqlx::PgPool::connect(&config.database_url).await?;
+            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool);
+            session_store.migrate().await?;
+            let session_layer = SessionManagerLayer::new(session_store)
+                .with_expiry(Expiry::OnInactivity(CookieDuration::days(7)));
+            base_router.layer(session_layer)
+        }
+    };
+
 
     let addr = format!("{}:{}", config.server_host, config.server_port);
     let listener = TcpListener::bind(&addr).await?;

@@ -19,12 +19,16 @@ use ksef_core::domain::invoice::{
 };
 use ksef_core::domain::job::{Job, JobId, JobStatus};
 use ksef_core::domain::nip::Nip;
+use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use ksef_core::domain::session::{KSeFNumber, SessionReference};
+use ksef_core::domain::user::{User, UserId};
 use ksef_core::error::RepositoryError;
 use ksef_core::infra::pg::{Db, run_migrations};
 use ksef_core::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use ksef_core::ports::job_queue::JobQueue;
+use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
+use ksef_core::ports::user_repository::UserRepository;
 
 // ---------------------------------------------------------------------------
 // Shared infrastructure: one container, isolated database per test
@@ -215,7 +219,7 @@ async fn invoice_save_and_find_by_id() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    let found = repo.find_by_id(&id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
     assert_eq!(found.id.as_uuid(), invoice.id.as_uuid());
     assert_eq!(found.invoice_number, invoice.invoice_number);
     assert_eq!(found.direction, Direction::Outgoing);
@@ -241,7 +245,7 @@ async fn invoice_save_and_find_by_id_mobile_payment_method() {
     invoice.payment_method = Some(PaymentMethod::Mobile);
     let id = repo.save(&invoice).await.unwrap();
 
-    let found = repo.find_by_id(&id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
     assert_eq!(found.payment_method, Some(PaymentMethod::Mobile));
 }
 
@@ -251,7 +255,7 @@ async fn invoice_find_by_id_not_found() {
     let repo = Db::new(pool);
 
     let missing_id = InvoiceId::new();
-    let err = repo.find_by_id(&missing_id).await.unwrap_err();
+    let err = InvoiceRepository::find_by_id(&repo, &missing_id).await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 
@@ -278,7 +282,7 @@ async fn invoice_update_status_changes_status() {
         .await
         .unwrap();
 
-    let found = repo.find_by_id(&id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
     assert_eq!(found.status, InvoiceStatus::Queued);
 }
 
@@ -304,7 +308,7 @@ async fn invoice_set_ksef_number_persists() {
 
     repo.set_ksef_number(&id, "KSeF-12345").await.unwrap();
 
-    let found = repo.find_by_id(&id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
     assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-12345");
 }
 
@@ -320,7 +324,7 @@ async fn invoice_set_ksef_error_persists() {
         .await
         .unwrap();
 
-    let found = repo.find_by_id(&id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
     assert_eq!(found.ksef_error.as_deref(), Some("submission timed out"));
 }
 
@@ -907,4 +911,209 @@ async fn session_multiple_tokens_returns_latest() {
 
     // The query orders by created_at DESC LIMIT 1, so we get the newest
     assert_eq!(found.token_pair.access_token.as_str(), "new-access");
+}
+
+// ===========================================================================
+// Migration idempotency
+// ===========================================================================
+
+#[tokio::test]
+async fn migrations_are_idempotent() {
+    let pool = isolated_pool().await;
+    // Run migrations a second time — must not fail.
+    run_migrations(&pool).await.unwrap();
+}
+
+// ===========================================================================
+// User Repository
+// ===========================================================================
+
+fn make_user(email: &str) -> User {
+    User {
+        id: UserId::new(),
+        email: email.to_string(),
+        password_hash: "$argon2id$v=19$m=19456,t=2,p=1$fake$fake".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }
+}
+
+fn make_nip_account(nip: &Nip) -> NipAccount {
+    NipAccount {
+        id: NipAccountId::new(),
+        nip: nip.clone(),
+        display_name: format!("Firma {}", nip.as_str()),
+        ksef_auth_method: KSeFAuthMethod::Xades,
+        ksef_auth_token: None,
+        cert_pem: None,
+        key_pem: None,
+        cert_auto_generated: false,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }
+}
+
+#[tokio::test]
+async fn user_create_and_find_by_id() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    let user = make_user("alice@example.com");
+    let id = UserRepository::create(&db, &user).await.unwrap();
+    let found = UserRepository::find_by_id(&db, &id).await.unwrap();
+    assert_eq!(found.email, "alice@example.com");
+}
+
+#[tokio::test]
+async fn user_find_by_email() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    UserRepository::create(&db, &make_user("bob@example.com")).await.unwrap();
+    let found = UserRepository::find_by_email(&db, "bob@example.com").await.unwrap();
+    assert!(found.is_some());
+}
+
+#[tokio::test]
+async fn user_find_by_email_not_found() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    let found = UserRepository::find_by_email(&db, "nobody@x.com").await.unwrap();
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+async fn user_duplicate_email_returns_error() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    UserRepository::create(&db, &make_user("dup@x.com")).await.unwrap();
+    let err = UserRepository::create(&db, &make_user("dup@x.com")).await.unwrap_err();
+    assert!(matches!(err, RepositoryError::Duplicate { .. }));
+}
+
+// ===========================================================================
+// NIP Account Repository
+// ===========================================================================
+
+#[tokio::test]
+async fn nip_account_create_and_find_by_nip() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    let acc = make_nip_account(&test_nip());
+    NipAccountRepository::create(&db, &acc).await.unwrap();
+    let found = NipAccountRepository::find_by_nip(&db, &test_nip()).await.unwrap();
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().display_name, acc.display_name);
+}
+
+#[tokio::test]
+async fn nip_account_duplicate_nip_returns_error() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    NipAccountRepository::create(&db, &make_nip_account(&test_nip())).await.unwrap();
+    let err = NipAccountRepository::create(&db, &make_nip_account(&test_nip())).await.unwrap_err();
+    assert!(matches!(err, RepositoryError::Duplicate { .. }));
+}
+
+#[tokio::test]
+async fn nip_account_update_credentials() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+    let mut acc = make_nip_account(&test_nip());
+    NipAccountRepository::create(&db, &acc).await.unwrap();
+
+    acc.ksef_auth_method = KSeFAuthMethod::Token;
+    acc.ksef_auth_token = Some("my-token".to_string());
+    acc.cert_pem = Some(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----".to_vec());
+    acc.key_pem = Some(b"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----".to_vec());
+    NipAccountRepository::update_credentials(&db, &acc).await.unwrap();
+
+    let found = NipAccountRepository::find_by_nip(&db, &test_nip()).await.unwrap().unwrap();
+    assert_eq!(found.ksef_auth_method, KSeFAuthMethod::Token);
+    assert_eq!(found.ksef_auth_token.as_deref(), Some("my-token"));
+    assert!(found.cert_pem.is_some());
+}
+
+// ===========================================================================
+// User <-> NIP Account access control
+// ===========================================================================
+
+#[tokio::test]
+async fn access_grant_and_list_by_user() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let user = make_user("owner@x.pl");
+    let user_id = UserRepository::create(&db, &user).await.unwrap();
+
+    let acc1 = make_nip_account(&test_nip());
+    let acc1_id = NipAccountRepository::create(&db, &acc1).await.unwrap();
+    let acc2 = make_nip_account(&other_nip());
+    let acc2_id = NipAccountRepository::create(&db, &acc2).await.unwrap();
+
+    db.grant_access(&user_id, &acc1_id).await.unwrap();
+    db.grant_access(&user_id, &acc2_id).await.unwrap();
+
+    let accounts = db.list_by_user(&user_id).await.unwrap();
+    assert_eq!(accounts.len(), 2);
+}
+
+#[tokio::test]
+async fn access_has_access_returns_account_when_granted() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let user = make_user("u@x.pl");
+    let user_id = UserRepository::create(&db, &user).await.unwrap();
+    let acc = make_nip_account(&test_nip());
+    let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
+    db.grant_access(&user_id, &acc_id).await.unwrap();
+
+    let result = db.has_access(&user_id, &test_nip()).await.unwrap();
+    assert!(result.is_some());
+}
+
+#[tokio::test]
+async fn access_has_access_returns_none_when_not_granted() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let user = make_user("u@x.pl");
+    let user_id = UserRepository::create(&db, &user).await.unwrap();
+    NipAccountRepository::create(&db, &make_nip_account(&test_nip())).await.unwrap();
+
+    let result = db.has_access(&user_id, &test_nip()).await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn access_revoke_removes_access() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let user = make_user("u@x.pl");
+    let user_id = UserRepository::create(&db, &user).await.unwrap();
+    let acc = make_nip_account(&test_nip());
+    let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
+    db.grant_access(&user_id, &acc_id).await.unwrap();
+
+    assert!(db.has_access(&user_id, &test_nip()).await.unwrap().is_some());
+    db.revoke_access(&user_id, &acc_id).await.unwrap();
+    assert!(db.has_access(&user_id, &test_nip()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn access_isolation_between_users() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let alice = make_user("alice@x.pl");
+    let alice_id = UserRepository::create(&db, &alice).await.unwrap();
+    let bob = make_user("bob@x.pl");
+    let bob_id = UserRepository::create(&db, &bob).await.unwrap();
+
+    let acc = make_nip_account(&test_nip());
+    let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
+    db.grant_access(&alice_id, &acc_id).await.unwrap();
+
+    assert!(db.has_access(&alice_id, &test_nip()).await.unwrap().is_some());
+    assert!(db.has_access(&bob_id, &test_nip()).await.unwrap().is_none());
 }

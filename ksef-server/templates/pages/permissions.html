@@ -3,7 +3,7 @@
 {% import "macros/forms.html" as forms %}
 
 {% block head %}
-<title>Uprawnienia - KSeF PayMoney</title>
+<title>Uprawnienia - KSeF Pay</title>
 {% endblock %}
 
 {% block content %}
@@ -19,7 +19,7 @@
 
 <div class="page-card">
   <h2>Nadaj uprawnienie</h2>
-  <form method="post" action="/permissions/grant" class="form-stack">
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/permissions/grant" class="form-stack">
     <div class="form-row">
       {% call forms::nip_input("grant_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
       {% call forms::nip_input("grant_auth", "authorized_nip", "NIP uprawnionego") %}{% endcall %}
@@ -36,7 +36,7 @@
 
 <div class="page-card">
   <h2>Odebierz uprawnienie</h2>
-  <form method="post" action="/permissions/revoke" class="form-stack">
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/permissions/revoke" class="form-stack">
     <div class="form-row">
       {% call forms::nip_input("revoke_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
       {% call forms::nip_input("revoke_auth", "authorized_nip", "NIP uprawnionego") %}{% endcall %}
@@ -53,7 +53,7 @@
 
 <div class="page-card">
   <h2>Zapytanie o uprawnienia</h2>
-  <form method="post" action="/permissions/query" class="form-stack">
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/permissions/query" class="form-stack">
     <div class="form-row">
       {% call forms::nip_input("query_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
     </div>

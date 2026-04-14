@@ -8,7 +8,7 @@
   </head>
   <body>
     <div class="ui-shell">
-      {% include "components/navbar.html" %}
+      {% block navbar %}{% include "components/navbar.html" %}{% endblock %}
       <main class="page-frame">
         {% block content %}{% endblock %}
       </main>

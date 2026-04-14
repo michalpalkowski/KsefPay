@@ -1,7 +1,7 @@
 {% extends "layouts/app.html" %}
 
 {% block head %}
-<title>Nowa faktura - KSeF PayMoney</title>
+<title>Nowa faktura - KSeF Pay</title>
 {% endblock %}
 
 {% block content %}
@@ -14,21 +14,21 @@
   <div class="alert alert-error">{{ msg }}</div>
   {% endif %}
 
-  <form method="post" action="/invoices" class="invoice-form">
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="invoice-form">
     <fieldset>
       <legend>Dane faktury</legend>
       <div class="form-row">
         <label for="invoice_number">Numer faktury</label>
-        <input type="text" name="invoice_number" id="invoice_number" placeholder="FV/2026/04/001" required />
+        <input type="text" name="invoice_number" id="invoice_number" value="{{ f.invoice_number }}" placeholder="FV/2026/04/001" required />
       </div>
       <div class="form-row-group">
         <div class="form-row">
           <label for="issue_date">Data wystawienia</label>
-          <input type="date" name="issue_date" id="issue_date" value="{{ today }}" required />
+          <input type="date" name="issue_date" id="issue_date" value="{{ f.issue_date }}" required />
         </div>
         <div class="form-row">
           <label for="sale_date">Data sprzedazy</label>
-          <input type="date" name="sale_date" id="sale_date" value="{{ today }}" required />
+          <input type="date" name="sale_date" id="sale_date" value="{{ f.sale_date }}" required />
         </div>
       </div>
     </fieldset>
@@ -37,19 +37,19 @@
       <legend>Sprzedawca</legend>
       <div class="form-row">
         <label for="seller_nip">NIP</label>
-        <input type="text" name="seller_nip" id="seller_nip" value="{{ default_nip }}" required />
+        <input type="text" name="seller_nip" id="seller_nip" value="{{ f.seller_nip }}" required />
       </div>
       <div class="form-row">
         <label for="seller_name">Nazwa firmy</label>
-        <input type="text" name="seller_name" id="seller_name" required />
+        <input type="text" name="seller_name" id="seller_name" value="{{ f.seller_name }}" required />
       </div>
       <div class="form-row">
         <label for="seller_address_line1">Adres (linia 1)</label>
-        <input type="text" name="seller_address_line1" id="seller_address_line1" placeholder="ul. Testowa 1" required />
+        <input type="text" name="seller_address_line1" id="seller_address_line1" value="{{ f.seller_address_line1 }}" placeholder="ul. Testowa 1" required />
       </div>
       <div class="form-row">
         <label for="seller_address_line2">Adres (linia 2)</label>
-        <input type="text" name="seller_address_line2" id="seller_address_line2" placeholder="00-001 Warszawa" required />
+        <input type="text" name="seller_address_line2" id="seller_address_line2" value="{{ f.seller_address_line2 }}" placeholder="00-001 Warszawa" required />
       </div>
     </fieldset>
 
@@ -57,19 +57,19 @@
       <legend>Nabywca</legend>
       <div class="form-row">
         <label for="buyer_nip">NIP</label>
-        <input type="text" name="buyer_nip" id="buyer_nip" placeholder="1234567890" required />
+        <input type="text" name="buyer_nip" id="buyer_nip" value="{{ f.buyer_nip }}" placeholder="1234567890" required />
       </div>
       <div class="form-row">
         <label for="buyer_name">Nazwa firmy</label>
-        <input type="text" name="buyer_name" id="buyer_name" required />
+        <input type="text" name="buyer_name" id="buyer_name" value="{{ f.buyer_name }}" required />
       </div>
       <div class="form-row">
         <label for="buyer_address_line1">Adres (linia 1)</label>
-        <input type="text" name="buyer_address_line1" id="buyer_address_line1" required />
+        <input type="text" name="buyer_address_line1" id="buyer_address_line1" value="{{ f.buyer_address_line1 }}" required />
       </div>
       <div class="form-row">
         <label for="buyer_address_line2">Adres (linia 2)</label>
-        <input type="text" name="buyer_address_line2" id="buyer_address_line2" required />
+        <input type="text" name="buyer_address_line2" id="buyer_address_line2" value="{{ f.buyer_address_line2 }}" required />
       </div>
     </fieldset>
 
@@ -77,25 +77,25 @@
       <legend>Pozycja</legend>
       <div class="form-row">
         <label for="item_description">Opis uslugi/towaru</label>
-        <input type="text" name="item_description" id="item_description" placeholder="Uslugi programistyczne" required />
+        <input type="text" name="item_description" id="item_description" value="{{ f.item_description }}" placeholder="Uslugi programistyczne" required />
       </div>
       <div class="form-row-group">
         <div class="form-row">
           <label for="item_quantity">Ilosc</label>
-          <input type="text" name="item_quantity" id="item_quantity" value="1" required />
+          <input type="text" name="item_quantity" id="item_quantity" value="{{ f.item_quantity }}" required />
         </div>
         <div class="form-row">
           <label for="item_unit_price">Cena netto (PLN)</label>
-          <input type="text" name="item_unit_price" id="item_unit_price" placeholder="150.00" required />
+          <input type="text" name="item_unit_price" id="item_unit_price" value="{{ f.item_unit_price }}" placeholder="150.00" required />
         </div>
         <div class="form-row">
           <label for="item_vat_rate">Stawka VAT</label>
           <select name="item_vat_rate" id="item_vat_rate">
-            <option value="23" selected>23%</option>
-            <option value="8">8%</option>
-            <option value="5">5%</option>
-            <option value="0">0%</option>
-            <option value="zw">Zwolniony</option>
+            <option value="23" {% if f.item_vat_rate == "23" %}selected{% endif %}>23%</option>
+            <option value="8" {% if f.item_vat_rate == "8" %}selected{% endif %}>8%</option>
+            <option value="5" {% if f.item_vat_rate == "5" %}selected{% endif %}>5%</option>
+            <option value="0" {% if f.item_vat_rate == "0" %}selected{% endif %}>0%</option>
+            <option value="zw" {% if f.item_vat_rate == "zw" %}selected{% endif %}>Zwolniony</option>
           </select>
         </div>
       </div>
@@ -107,25 +107,25 @@
         <div class="form-row">
           <label for="payment_method">Metoda platnosci</label>
           <select name="payment_method" id="payment_method">
-            <option value="transfer" selected>Przelew</option>
-            <option value="cash">Gotowka</option>
-            <option value="card">Karta</option>
+            <option value="transfer" {% if f.payment_method == "transfer" %}selected{% endif %}>Przelew</option>
+            <option value="cash" {% if f.payment_method == "cash" %}selected{% endif %}>Gotowka</option>
+            <option value="card" {% if f.payment_method == "card" %}selected{% endif %}>Karta</option>
           </select>
         </div>
         <div class="form-row">
           <label for="payment_deadline">Termin platnosci</label>
-          <input type="date" name="payment_deadline" id="payment_deadline" value="{{ payment_deadline }}" required />
+          <input type="date" name="payment_deadline" id="payment_deadline" value="{{ f.payment_deadline }}" required />
         </div>
       </div>
       <div class="form-row">
         <label for="bank_account">Numer konta bankowego</label>
-        <input type="text" name="bank_account" id="bank_account" placeholder="PL12345678901234567890123456" />
+        <input type="text" name="bank_account" id="bank_account" value="{{ f.bank_account }}" placeholder="PL12345678901234567890123456" />
       </div>
     </fieldset>
 
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Utworz fakture</button>
-      <a href="/invoices" class="btn btn-secondary">Anuluj</a>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-secondary">Anuluj</a>
     </div>
   </form>
 </div>

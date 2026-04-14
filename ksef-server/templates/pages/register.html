@@ -1,0 +1,42 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Rejestracja - KSeF Pay</title>
+{% endblock %}
+
+{% block navbar %}{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>Rejestracja</h1>
+    <p class="page-copy">Utworz konto w KSeF Pay</p>
+  </div>
+
+  {% if let Some(msg) = error %}
+  <div class="alert alert-error">{{ msg }}</div>
+  {% endif %}
+
+  <form method="post" action="/register">
+    <div class="form-row">
+      <label for="email">Email</label>
+      <input type="email" name="email" id="email" value="{{ email }}" placeholder="twoj@email.pl" required autofocus />
+    </div>
+    <div class="form-row">
+      <label for="password">Haslo</label>
+      <input type="password" name="password" id="password" minlength="8" required />
+    </div>
+    <div class="form-row">
+      <label for="password_confirm">Powtorz haslo</label>
+      <input type="password" name="password_confirm" id="password_confirm" minlength="8" required />
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Zarejestruj sie</button>
+    </div>
+  </form>
+
+  <p class="page-copy" style="margin-top: 1rem;">
+    Masz juz konto? <a href="/login">Zaloguj sie</a>
+  </p>
+</div>
+{% endblock %}

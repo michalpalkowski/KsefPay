@@ -1,7 +1,7 @@
 {% extends "layouts/app.html" %}
 
 {% block head %}
-<title>{{ invoice.invoice_number }} - KSeF PayMoney</title>
+<title>{{ invoice.invoice_number }} - KSeF Pay</title>
 {% endblock %}
 
 {% block content %}
@@ -97,7 +97,7 @@
 
   {% if invoice.status.to_string() == "draft" %}
   <div class="invoice-actions">
-    <form method="post" action="/invoices/{{ invoice.id }}/submit">
+    <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/{{ invoice.id }}/submit">
       <button type="submit" class="btn btn-primary">Wyslij do KSeF</button>
     </form>
   </div>
@@ -113,5 +113,5 @@
   {% endmatch %}
 </div>
 
-<a href="/invoices" class="back-link">Powrot do listy</a>
+<a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="back-link">Powrot do listy</a>
 {% endblock %}
