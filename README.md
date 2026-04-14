@@ -82,6 +82,26 @@ Zbiorczy eksport faktur z KSeF za wybrany okres — przydatne do archiwizacji al
 
 Uruchamiamy lokalnie przez `cargo run`, a konfigurację trzymamy w `.env` (z automatycznym ładowaniem przez `mise`).
 
+### 0) Zainstaluj mise (jednorazowo)
+
+#### Ubuntu/Debian
+
+```sh
+curl https://mise.run | sh
+~/.local/bin/mise --version
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+exec "$SHELL" -l
+```
+
+#### macOS
+
+```sh
+brew install mise
+mise --version
+echo 'eval "$(mise activate zsh)"' >> "${ZDOTDIR-$HOME}/.zshrc"
+exec "$SHELL" -l
+```
+
 ### 1) Skonfiguruj env
 
 ```sh
