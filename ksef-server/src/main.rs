@@ -13,7 +13,6 @@ use ksef_core::infra::fa3::Fa3XmlConverter;
 use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
 use ksef_core::infra::ksef::KSeFApiClient;
-use ksef_core::infra::pg::Db;
 use ksef_core::infra::qr::generator::QRCodeGenerator;
 use ksef_core::services::batch_service::BatchService;
 use ksef_core::services::export_service::ExportService;
@@ -27,6 +26,7 @@ use ksef_core::services::token_mgmt_service::TokenMgmtService;
 use ksef_core::workers::job_worker::JobWorker;
 
 mod config;
+mod db_backend;
 mod routes;
 mod state;
 
@@ -86,17 +86,10 @@ async fn main() -> anyhow::Result<()> {
 
     let config = config::Config::from_env().map_err(|e| anyhow::anyhow!(e))?;
 
-    tracing::info!(
-        environment = %config.ksef_environment,
-        "connecting to database"
-    );
+    tracing::info!(environment = %config.ksef_environment, "initializing database");
+    let db = db_backend::connect(&config.database_url).await?;
+    tracing::info!(backend = ?db.kind, "database backend ready");
 
-    let pool = sqlx::PgPool::connect(&config.database_url).await?;
-
-    tracing::info!("running migrations");
-    ksef_core::infra::pg::run_migrations(&pool).await?;
-
-    let db = Arc::new(Db::new(pool));
     let ksef = Arc::new(KSeFApiClient::with_http_controls(
         config.ksef_environment,
         Arc::new(TokenBucketRateLimiter::default()),
@@ -124,14 +117,14 @@ async fn main() -> anyhow::Result<()> {
         ksef.clone(),
         signer,
         ksef.clone(),
-        db.clone(),
+        db.session_repo.clone(),
         config.ksef_environment,
         auth_method,
     ));
     let invoice_service = Arc::new(InvoiceService::with_atomic(
-        db.clone(),
-        db.clone(),
-        db.clone(),
+        db.invoice_repo.clone(),
+        db.job_queue.clone(),
+        db.atomic_scope_factory.clone(),
     ));
     let encryptor = Arc::new(AesCbcEncryptor);
     let decryptor = Arc::new(AesCbcEncryptor);
@@ -141,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
     let fetch_service = Arc::new(FetchService::new(
         session_service.clone(),
         ksef.clone(),
-        db.clone(),
+        db.invoice_repo.clone(),
         xml_converter.clone(),
         config.ksef_nip.clone(),
     ));
@@ -164,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
     // --- Job worker ---
 
     let job_worker = Arc::new(JobWorker::new(
-        db.clone(),
+        db.job_queue.clone(),
         invoice_service.clone(),
         session_service.clone(),
         ksef.clone(),
