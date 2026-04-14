@@ -232,6 +232,11 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         worker_join = &mut worker_handle => {
+            // Worker finished first. This is normal during shutdown (worker reacts
+            // to the watch channel faster than the server drains connections).
+            // Only treat it as an error if shutdown was NOT requested.
+            let shutdown_requested = *shutdown_tx.borrow();
+
             if let Err(err) = shutdown_tx.send(true) {
                 tracing::debug!("worker shutdown channel already closed: {err}");
             }
@@ -243,7 +248,12 @@ async fn main() -> anyhow::Result<()> {
             let serve_result = (&mut server).await;
             serve_result.map_err(|err| anyhow::anyhow!("server exited with error: {err}"))?;
 
-            Err(anyhow::anyhow!("worker exited before server shutdown"))
+            if shutdown_requested {
+                tracing::info!("clean shutdown complete");
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("worker exited unexpectedly before server shutdown"))
+            }
         }
     };
 

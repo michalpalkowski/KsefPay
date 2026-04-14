@@ -1,6 +1,6 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx::SqliteExecutor;
 
+use super::datetime::parse_sqlite_datetime;
 use crate::domain::job::{Job, JobId, JobStatus};
 use crate::error::QueueError;
 
@@ -16,19 +16,8 @@ pub(crate) struct JobRow {
     pub created_at: String,
 }
 
-fn parse_datetime(value: &str, field: &'static str) -> Result<DateTime<Utc>, QueueError> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
-        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
-    }
-    if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f") {
-        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
-    }
-    Err(QueueError::DequeueFailed(format!(
-        "invalid datetime in {field}: '{value}'"
-    )))
+fn parse_datetime(value: &str, field: &'static str) -> Result<chrono::DateTime<chrono::Utc>, QueueError> {
+    parse_sqlite_datetime(value, field).map_err(QueueError::DequeueFailed)
 }
 
 impl JobRow {
