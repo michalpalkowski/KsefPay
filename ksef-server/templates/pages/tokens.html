@@ -18,32 +18,33 @@
 
 <div class="page-card">
   <h2>Wygeneruj nowy token</h2>
-  <form method="post" action="/tokens/generate" class="form-stack">
+  <form method="post" action="/tokens/generate" class="form-stack" id="token-form">
+    <input type="hidden" name="permissions" id="permissions-value" value="InvoiceRead" />
     <div class="form-group">
       <label>Uprawnienia</label>
       <div class="checkbox-group">
         <label class="checkbox-label">
-          <input type="checkbox" name="permissions" value="InvoiceRead" checked />
+          <input type="checkbox" data-perm="InvoiceRead" checked />
           Odczyt faktur
         </label>
         <label class="checkbox-label">
-          <input type="checkbox" name="permissions" value="InvoiceWrite" />
+          <input type="checkbox" data-perm="InvoiceWrite" />
           Wystawianie faktur
         </label>
         <label class="checkbox-label">
-          <input type="checkbox" name="permissions" value="CredentialsRead" />
+          <input type="checkbox" data-perm="CredentialsRead" />
           Odczyt uprawnien
         </label>
         <label class="checkbox-label">
-          <input type="checkbox" name="permissions" value="CredentialsManage" />
+          <input type="checkbox" data-perm="CredentialsManage" />
           Zarzadzanie uprawnieniami
         </label>
         <label class="checkbox-label">
-          <input type="checkbox" name="permissions" value="SubunitManage" />
+          <input type="checkbox" data-perm="SubunitManage" />
           Zarzadzanie podjednostkami
         </label>
         <label class="checkbox-label">
-          <input type="checkbox" name="permissions" value="EnforcementOperations" />
+          <input type="checkbox" data-perm="EnforcementOperations" />
           Operacje egzekucyjne
         </label>
       </div>
@@ -56,6 +57,23 @@
       <button type="submit" class="btn btn-primary">Wygeneruj</button>
     </div>
   </form>
+  <script>
+  (function() {
+    var form = document.getElementById('token-form');
+    var hidden = document.getElementById('permissions-value');
+    function sync() {
+      var checked = [];
+      form.querySelectorAll('[data-perm]').forEach(function(cb) {
+        if (cb.checked) checked.push(cb.getAttribute('data-perm'));
+      });
+      hidden.value = checked.join(',');
+    }
+    form.querySelectorAll('[data-perm]').forEach(function(cb) {
+      cb.addEventListener('change', sync);
+    });
+    sync();
+  })();
+  </script>
 </div>
 
 {% if !tokens.is_empty() %}

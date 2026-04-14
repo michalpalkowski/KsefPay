@@ -42,8 +42,9 @@ fn empty_page(error: Option<String>, success: Option<String>) -> Response {
 
 #[derive(Deserialize)]
 pub struct GenerateFormData {
+    /// Comma-separated permission names from the hidden form field.
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: String,
     pub description: Option<String>,
 }
 
@@ -77,14 +78,20 @@ pub async fn generate(
     State(state): State<AppState>,
     Form(form): Form<GenerateFormData>,
 ) -> Response {
-    if form.permissions.is_empty() {
+    let raw_permissions: Vec<&str> = form
+        .permissions
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if raw_permissions.is_empty() {
         return empty_page(
             Some("Wymagane co najmniej jedno uprawnienie".to_string()),
             None,
         );
     }
     let permissions: Result<Vec<PermissionType>, _> =
-        form.permissions.iter().map(|s| s.parse()).collect();
+        raw_permissions.iter().map(|s| s.parse()).collect();
     let permissions = match permissions {
         Ok(p) => p,
         Err(e) => return empty_page(Some(format!("Uprawnienia: {e}")), None),
