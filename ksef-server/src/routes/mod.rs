@@ -1,4 +1,5 @@
 use axum::Router;
+use axum::extract::Request;
 use axum::response::Redirect;
 use axum::routing::{get, post};
 
@@ -95,4 +96,23 @@ pub fn router() -> Router<AppState> {
             "/accounts/{nip}/export/{reference}/download",
             get(export::download),
         )
+        // Strip trailing slashes: /foo/ → 308 redirect to /foo
+        .fallback(trailing_slash_redirect)
 }
+
+async fn trailing_slash_redirect(req: Request) -> axum::response::Response {
+    let path = req.uri().path();
+    if path.len() > 1 && path.ends_with('/') {
+        let new_path = path.trim_end_matches('/');
+        let new_uri = if let Some(query) = req.uri().query() {
+            format!("{new_path}?{query}")
+        } else {
+            new_path.to_string()
+        };
+        Redirect::permanent(&new_uri).into_response()
+    } else {
+        (axum::http::StatusCode::NOT_FOUND, "Nie znaleziono strony").into_response()
+    }
+}
+
+use axum::response::IntoResponse;

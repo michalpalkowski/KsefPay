@@ -21,12 +21,14 @@ use crate::state::AppState;
 #[template(path = "pages/login.html")]
 struct LoginTemplate {
     error: Option<String>,
+    email: String,
 }
 
 #[derive(Template)]
 #[template(path = "pages/register.html")]
 struct RegisterTemplate {
     error: Option<String>,
+    email: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -73,7 +75,10 @@ pub async fn login_page(session: Session) -> Response {
     if let Ok(Some(_)) = session.get::<String>("user_id").await {
         return Redirect::to("/accounts").into_response();
     }
-    render(LoginTemplate { error: None })
+    render(LoginTemplate {
+        error: None,
+        email: String::new(),
+    })
 }
 
 pub async fn login(
@@ -87,6 +92,7 @@ pub async fn login(
             StatusCode::BAD_REQUEST,
             LoginTemplate {
                 error: Some("Email i haslo sa wymagane".to_string()),
+                email,
             },
         );
     }
@@ -98,6 +104,7 @@ pub async fn login(
                 StatusCode::UNAUTHORIZED,
                 LoginTemplate {
                     error: Some("Nieprawidlowy email lub haslo".to_string()),
+                    email,
                 },
             );
         }
@@ -106,6 +113,7 @@ pub async fn login(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 LoginTemplate {
                     error: Some(format!("Blad serwera: {e}")),
+                    email,
                 },
             );
         }
@@ -116,6 +124,7 @@ pub async fn login(
             StatusCode::INTERNAL_SERVER_ERROR,
             LoginTemplate {
                 error: Some("Blad weryfikacji hasla".to_string()),
+                email,
             },
         );
     };
@@ -128,6 +137,7 @@ pub async fn login(
             StatusCode::UNAUTHORIZED,
             LoginTemplate {
                 error: Some("Nieprawidlowy email lub haslo".to_string()),
+                email,
             },
         );
     }
@@ -141,6 +151,7 @@ pub async fn login(
             StatusCode::INTERNAL_SERVER_ERROR,
             LoginTemplate {
                 error: Some(format!("Blad sesji: {e}")),
+                email,
             },
         );
     }
@@ -153,7 +164,10 @@ pub async fn register_page(session: Session) -> Response {
     if let Ok(Some(_)) = session.get::<String>("user_id").await {
         return Redirect::to("/accounts").into_response();
     }
-    render(RegisterTemplate { error: None })
+    render(RegisterTemplate {
+        error: None,
+        email: String::new(),
+    })
 }
 
 pub async fn register(
@@ -169,6 +183,7 @@ pub async fn register(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
                 error: Some("Email i haslo sa wymagane".to_string()),
+                email,
             },
         );
     }
@@ -178,6 +193,7 @@ pub async fn register(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
                 error: Some("Nieprawidlowy adres email".to_string()),
+                email,
             },
         );
     }
@@ -187,6 +203,7 @@ pub async fn register(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
                 error: Some("Haslo musi miec co najmniej 8 znakow".to_string()),
+                email,
             },
         );
     }
@@ -196,6 +213,7 @@ pub async fn register(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
                 error: Some("Hasla nie sa zgodne".to_string()),
+                email,
             },
         );
     }
@@ -207,6 +225,7 @@ pub async fn register(
                 StatusCode::CONFLICT,
                 RegisterTemplate {
                     error: Some("Konto z tym adresem email juz istnieje".to_string()),
+                    email,
                 },
             );
         }
@@ -216,6 +235,7 @@ pub async fn register(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 RegisterTemplate {
                     error: Some(format!("Blad serwera: {e}")),
+                    email,
                 },
             );
         }
@@ -230,6 +250,7 @@ pub async fn register(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 RegisterTemplate {
                     error: Some(format!("Blad hashowania hasla: {e}")),
+                    email,
                 },
             );
         }
@@ -249,6 +270,7 @@ pub async fn register(
             StatusCode::INTERNAL_SERVER_ERROR,
             RegisterTemplate {
                 error: Some(format!("Nie udalo sie utworzyc konta: {e}")),
+                email,
             },
         );
     }
@@ -259,6 +281,7 @@ pub async fn register(
             StatusCode::INTERNAL_SERVER_ERROR,
             RegisterTemplate {
                 error: Some(format!("Blad sesji: {e}")),
+                email,
             },
         );
     }

@@ -30,6 +30,8 @@ struct AccountAddTemplate {
     nip_prefix: Option<String>,
     user_email: String,
     error: Option<String>,
+    nip: String,
+    display_name: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -90,6 +92,8 @@ pub async fn add_form(auth: AuthUser) -> Response {
         nip_prefix: None,
         user_email: auth.email,
         error: None,
+        nip: String::new(),
+        display_name: String::new(),
     })
 }
 
@@ -98,6 +102,9 @@ pub async fn add(
     auth: AuthUser,
     Form(form): Form<AddAccountFormData>,
 ) -> Response {
+    let form_nip = form.nip.clone();
+    let form_display_name = form.display_name.clone();
+
     let nip = match Nip::parse(&form.nip) {
         Ok(n) => n,
         Err(e) => {
@@ -108,6 +115,8 @@ pub async fn add(
                     nip_prefix: None,
                     user_email: auth.email,
                     error: Some(format!("Nieprawidlowy NIP: {e}")),
+                    nip: form_nip,
+                    display_name: form_display_name,
                 },
             );
         }
@@ -122,6 +131,8 @@ pub async fn add(
                 nip_prefix: None,
                 user_email: auth.email,
                 error: Some("Nazwa wyswietlana jest wymagana".to_string()),
+                nip: form_nip,
+                display_name: form_display_name,
             },
         );
     }
@@ -152,6 +163,8 @@ pub async fn add(
                         nip_prefix: None,
                         user_email: auth.email,
                         error: Some(format!("Nie udalo sie utworzyc konta NIP: {e}")),
+                        nip: form_nip,
+                        display_name: form_display_name,
                     },
                 );
             }
@@ -165,6 +178,8 @@ pub async fn add(
                     nip_prefix: None,
                     user_email: auth.email,
                     error: Some(format!("Blad serwera: {e}")),
+                    nip: form_nip,
+                    display_name: form_display_name,
                 },
             );
         }

@@ -1,7 +1,7 @@
 {% extends "layouts/app.html" %}
 
 {% block head %}
-<title>Logowanie - KSeF PayMoney</title>
+<title>Logowanie - KSeF Pay</title>
 {% endblock %}
 
 {% block navbar %}{% endblock %}
@@ -10,7 +10,7 @@
 <div class="page-card">
   <div class="page-header">
     <h1>Logowanie</h1>
-    <p class="page-copy">Zaloguj sie do KSeF PayMoney</p>
+    <p class="page-copy">Zaloguj sie do KSeF Pay</p>
   </div>
 
   {% if let Some(msg) = error %}
@@ -20,7 +20,7 @@
   <form method="post" action="/login">
     <div class="form-row">
       <label for="email">Email</label>
-      <input type="email" name="email" id="email" placeholder="twoj@email.pl" required autofocus />
+      <input type="email" name="email" id="email" value="{{ email }}" placeholder="twoj@email.pl" required autofocus />
     </div>
     <div class="form-row">
       <label for="password">Haslo</label>

@@ -221,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+
     let addr = format!("{}:{}", config.server_host, config.server_port);
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("listening on {addr}");
