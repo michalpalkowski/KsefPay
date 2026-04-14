@@ -25,6 +25,13 @@ pub fn router() -> Router<AppState> {
         .route("/health", get(health::health))
         // Authenticated routes
         .route("/", get(|| async { Redirect::to("/accounts") }))
+        // Legacy routes (pre-multi-tenant) → redirect to account picker
+        .route("/invoices", get(|| async { Redirect::to("/accounts") }))
+        .route("/invoices/{*rest}", get(|| async { Redirect::to("/accounts") }))
+        .route("/sessions", get(|| async { Redirect::to("/accounts") }))
+        .route("/permissions", get(|| async { Redirect::to("/accounts") }))
+        .route("/tokens", get(|| async { Redirect::to("/accounts") }))
+        .route("/export", get(|| async { Redirect::to("/accounts") }))
         .route("/accounts", get(accounts::list))
         .route("/accounts/add", get(accounts::add_form).post(accounts::add))
         // NIP-scoped routes (uses NipContext extractor)
