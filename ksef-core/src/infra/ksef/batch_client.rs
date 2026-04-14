@@ -425,6 +425,15 @@ mod tests {
         };
 
         let body = build_open_batch_request_body(&request, "enc-key", "iv");
+        assert_eq!(body["formCode"]["systemCode"], "FA (3)");
+        assert_eq!(body["formCode"]["schemaVersion"], "1-0E");
+        assert_eq!(body["formCode"]["value"], "FA");
+        assert_eq!(body["batchFile"]["fileSize"], 1234);
+        assert_eq!(body["batchFile"]["fileHash"], "filehash");
+        assert_eq!(body["encryption"]["encryptedSymmetricKey"], "enc-key");
+        assert_eq!(body["encryption"]["initializationVector"], "iv");
+        assert_eq!(body["offlineMode"], false);
+
         let parts = body
             .get("batchFile")
             .and_then(|v| v.get("fileParts"))

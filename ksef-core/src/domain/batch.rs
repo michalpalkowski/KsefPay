@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::DomainError;
 
@@ -35,7 +35,7 @@ pub struct PartUploadRequest {
     pub part: BatchFilePartInfo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UploadUrl(String);
 
 impl UploadUrl {
@@ -62,13 +62,35 @@ impl FromStr for UploadUrl {
                 value: s.to_string(),
             });
         }
-        if !(value.starts_with("https://") || value.starts_with("http://")) {
+        let Some((scheme, rest)) = value.split_once("://") else {
+            return Err(DomainError::InvalidParse {
+                type_name: "UploadUrl",
+                value: s.to_string(),
+            });
+        };
+        if rest.is_empty() {
+            return Err(DomainError::InvalidParse {
+                type_name: "UploadUrl",
+                value: s.to_string(),
+            });
+        }
+        if !(scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")) {
             return Err(DomainError::InvalidParse {
                 type_name: "UploadUrl",
                 value: s.to_string(),
             });
         }
         Ok(Self(value.to_string()))
+    }
+}
+
+impl<'de> Deserialize<'de> for UploadUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -167,6 +189,13 @@ mod tests {
                 .as_str(),
             "http://localhost:9000/part"
         );
+        assert_eq!(
+            "HTTPS://UPLOAD.EXAMPLE/PATH"
+                .parse::<UploadUrl>()
+                .unwrap()
+                .as_str(),
+            "HTTPS://UPLOAD.EXAMPLE/PATH"
+        );
     }
 
     #[test]
@@ -174,5 +203,13 @@ mod tests {
         assert!("".parse::<UploadUrl>().is_err());
         assert!("   ".parse::<UploadUrl>().is_err());
         assert!("ftp://example.com/file".parse::<UploadUrl>().is_err());
+        assert!("https://".parse::<UploadUrl>().is_err());
+    }
+
+    #[test]
+    fn upload_url_deserialize_uses_same_validation() {
+        let parsed: UploadUrl = serde_json::from_str("\"https://upload.example/part\"").unwrap();
+        assert_eq!(parsed.as_str(), "https://upload.example/part");
+        assert!(serde_json::from_str::<UploadUrl>("\"ftp://upload.example/part\"").is_err());
     }
 }
