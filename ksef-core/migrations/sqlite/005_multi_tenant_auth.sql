@@ -1,4 +1,5 @@
--- Multi-tenant auth: users, NIP accounts, access control, HTTP sessions.
+-- SQLite schema already includes multi-tenant tables and columns in 001_initial_schema.sql.
+-- This migration only creates the new standalone tables (idempotent via IF NOT EXISTS).
 
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -31,15 +32,8 @@ CREATE TABLE IF NOT EXISTS user_nip_access (
 
 CREATE INDEX IF NOT EXISTS idx_user_nip_access_user ON user_nip_access(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_nip_access_nip ON user_nip_access(nip_account_id);
-
--- Add nip_account_id to invoices
-ALTER TABLE invoices ADD COLUMN nip_account_id TEXT REFERENCES nip_accounts(id);
 CREATE INDEX IF NOT EXISTS idx_invoices_nip_account ON invoices(nip_account_id);
 
--- Add nip to jobs for worker context
-ALTER TABLE jobs ADD COLUMN nip TEXT;
-
--- tower-sessions storage
 CREATE TABLE IF NOT EXISTS tower_sessions (
     id TEXT PRIMARY KEY NOT NULL,
     data BLOB NOT NULL,
