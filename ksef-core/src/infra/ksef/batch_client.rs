@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde_json::Value;
 
 use crate::domain::auth::AccessToken;
-use crate::domain::batch::{BatchSession, BatchSessionStatus, PartUploadRequest};
+use crate::domain::batch::{BatchSession, BatchSessionStatus, PartUploadRequest, UploadUrl};
 use crate::domain::environment::KSeFEnvironment;
 use crate::domain::xml::InvoiceXml;
 use crate::error::KSeFError;
@@ -26,7 +26,7 @@ pub struct HttpKSeFBatch {
 
 #[derive(Debug, Clone)]
 struct UploadTarget {
-    url: String,
+    url: UploadUrl,
     headers: HashMap<String, String>,
 }
 
@@ -180,6 +180,9 @@ fn parse_open_batch_upload_targets(
         let url = str_by_keys(target, &["url"]).ok_or_else(|| {
             KSeFError::StatusQueryFailed("partUploadRequest missing url".to_string())
         })?;
+        let upload_url = url.parse::<UploadUrl>().map_err(|_| {
+            KSeFError::StatusQueryFailed(format!("invalid part upload url: '{url}'"))
+        })?;
         let headers = target
             .get("headers")
             .and_then(Value::as_object)
@@ -192,12 +195,47 @@ fn parse_open_batch_upload_targets(
         parsed.insert(
             ordinal,
             UploadTarget {
-                url: url.to_string(),
+                url: upload_url,
                 headers,
             },
         );
     }
     Ok(parsed)
+}
+
+fn build_open_batch_request_body(
+    request: &BatchOpenRequest,
+    encrypted_symmetric_key: &str,
+    initialization_vector: &str,
+) -> Value {
+    let file_parts = request
+        .parts
+        .iter()
+        .map(|part| {
+            serde_json::json!({
+                "ordinalNumber": part.part_number,
+                "fileSize": part.size_bytes,
+                "fileHash": part.hash_sha256_base64,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "formCode": {
+            "systemCode": "FA (3)",
+            "schemaVersion": "1-0E",
+            "value": "FA",
+        },
+        "batchFile": {
+            "fileSize": request.file.file_size_bytes,
+            "fileHash": request.file.file_hash_sha256_base64,
+            "fileParts": file_parts,
+        },
+        "encryption": {
+            "encryptedSymmetricKey": encrypted_symmetric_key,
+            "initializationVector": initialization_vector,
+        },
+        "offlineMode": false
+    })
 }
 
 #[async_trait]
@@ -216,34 +254,11 @@ impl KSeFBatch for HttpKSeFBatch {
         let url = format!("{}/sessions/batch", self.http.base_url);
         let (encrypted_symmetric_key, initialization_vector) =
             self.prepare_batch_encryption(access_token).await?;
-        let file_parts = request
-            .parts
-            .iter()
-            .map(|part| {
-                serde_json::json!({
-                    "ordinalNumber": part.part_number,
-                    "fileSize": part.size_bytes,
-                    "fileHash": part.hash_sha256_base64,
-                })
-            })
-            .collect::<Vec<_>>();
-        let body = serde_json::json!({
-            "formCode": {
-                "systemCode": "FA (3)",
-                "schemaVersion": "1-0E",
-                "value": "FA",
-            },
-            "batchFile": {
-                "fileSize": request.file.file_size_bytes,
-                "fileHash": request.file.file_hash_sha256_base64,
-                "fileParts": file_parts,
-            },
-            "encryption": {
-                "encryptedSymmetricKey": encrypted_symmetric_key,
-                "initializationVector": initialization_vector,
-            },
-            "offlineMode": false
-        });
+        let body = build_open_batch_request_body(
+            request,
+            &encrypted_symmetric_key,
+            &initialization_vector,
+        );
         let response = self
             .http
             .send(RateLimitCategory::Session, || {
@@ -280,7 +295,9 @@ impl KSeFBatch for HttpKSeFBatch {
             ));
         }
 
-        let (part_url, headers) = if request.upload_url.trim().is_empty() {
+        let (part_url, headers) = if let Some(upload_url) = &request.upload_url {
+            (upload_url.to_string(), HashMap::new())
+        } else {
             let guard = self.part_upload_targets.lock().unwrap();
             let session_targets = guard.get(&request.session_reference).ok_or_else(|| {
                 KSeFError::StatusQueryFailed(format!(
@@ -296,9 +313,7 @@ impl KSeFBatch for HttpKSeFBatch {
                         request.part.part_number
                     ))
                 })?;
-            (target.url.clone(), target.headers.clone())
-        } else {
-            (request.upload_url.clone(), HashMap::new())
+            (target.url.to_string(), target.headers.clone())
         };
 
         self.http
@@ -365,6 +380,7 @@ impl KSeFBatch for HttpKSeFBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::batch::{BatchFileInfo, BatchFilePartInfo};
 
     #[test]
     fn parse_batch_session_accepts_minimal_payload() {
@@ -382,5 +398,45 @@ mod tests {
         let payload = serde_json::json!({"status": "created"});
         let err = parse_batch_session(&payload).unwrap_err();
         assert!(matches!(err, KSeFError::StatusQueryFailed(_)));
+    }
+
+    #[test]
+    fn open_batch_body_maps_all_parts_contract() {
+        let request = BatchOpenRequest {
+            file: BatchFileInfo {
+                file_name: "batch.zip".to_string(),
+                file_size_bytes: 1234,
+                file_hash_sha256_base64: "filehash".to_string(),
+            },
+            parts: vec![
+                BatchFilePartInfo {
+                    part_number: 1,
+                    offset_bytes: 0,
+                    size_bytes: 600,
+                    hash_sha256_base64: "hash-1".to_string(),
+                },
+                BatchFilePartInfo {
+                    part_number: 2,
+                    offset_bytes: 600,
+                    size_bytes: 634,
+                    hash_sha256_base64: "hash-2".to_string(),
+                },
+            ],
+        };
+
+        let body = build_open_batch_request_body(&request, "enc-key", "iv");
+        let parts = body
+            .get("batchFile")
+            .and_then(|v| v.get("fileParts"))
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["ordinalNumber"], 1);
+        assert_eq!(parts[0]["fileSize"], 600);
+        assert_eq!(parts[0]["fileHash"], "hash-1");
+        assert_eq!(parts[1]["ordinalNumber"], 2);
+        assert_eq!(parts[1]["fileSize"], 634);
+        assert_eq!(parts[1]["fileHash"], "hash-2");
     }
 }

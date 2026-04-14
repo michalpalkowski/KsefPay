@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,8 +31,45 @@ pub struct BatchArchive {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartUploadRequest {
     pub session_reference: String,
-    pub upload_url: String,
+    pub upload_url: Option<UploadUrl>,
     pub part: BatchFilePartInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadUrl(String);
+
+impl UploadUrl {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for UploadUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for UploadUrl {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = s.trim();
+        if value.is_empty() {
+            return Err(DomainError::InvalidParse {
+                type_name: "UploadUrl",
+                value: s.to_string(),
+            });
+        }
+        if !(value.starts_with("https://") || value.starts_with("http://")) {
+            return Err(DomainError::InvalidParse {
+                type_name: "UploadUrl",
+                value: s.to_string(),
+            });
+        }
+        Ok(Self(value.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,5 +149,30 @@ mod tests {
             BatchSessionStatus::Created.transition_to(BatchSessionStatus::Completed),
             Err(DomainError::InvalidStatusTransition { .. })
         ));
+    }
+
+    #[test]
+    fn upload_url_accepts_http_and_https() {
+        assert_eq!(
+            "https://upload.example/path?x=1"
+                .parse::<UploadUrl>()
+                .unwrap()
+                .as_str(),
+            "https://upload.example/path?x=1"
+        );
+        assert_eq!(
+            "http://localhost:9000/part"
+                .parse::<UploadUrl>()
+                .unwrap()
+                .as_str(),
+            "http://localhost:9000/part"
+        );
+    }
+
+    #[test]
+    fn upload_url_rejects_empty_or_non_http_scheme() {
+        assert!("".parse::<UploadUrl>().is_err());
+        assert!("   ".parse::<UploadUrl>().is_err());
+        assert!("ftp://example.com/file".parse::<UploadUrl>().is_err());
     }
 }

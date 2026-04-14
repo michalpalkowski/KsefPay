@@ -799,7 +799,7 @@ async fn batch_open_upload_parts_and_close() {
             &token_pair.access_token,
             &PartUploadRequest {
                 session_reference: opened.reference_number.clone(),
-                upload_url: String::new(),
+                upload_url: None,
                 part: part.clone(),
             },
             payload,

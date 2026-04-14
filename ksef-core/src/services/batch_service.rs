@@ -70,7 +70,7 @@ impl BatchService {
                     access_token,
                     &PartUploadRequest {
                         session_reference: opened.reference_number.clone(),
-                        upload_url: String::new(),
+                        upload_url: None,
                         part: part.clone(),
                     },
                     payload,
