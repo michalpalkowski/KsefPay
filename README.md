@@ -111,7 +111,10 @@ cp .env.example .env
 W `.env` ustaw przynajmniej:
 
 ```
-DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef
+# Wybierz JEDEN backend:
+# DATABASE_URL=sqlite://./.data/ksef.db
+# DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef
+
 KSEF_NIP=5260250274
 ```
 
@@ -127,7 +130,19 @@ _.file = ".env"
 Po jednorazowym `mise trust` zmienne z `.env` będą automatycznie dostępne w shellu po wejściu do katalogu projektu (podobnie do `direnv`).
 Jeśli nie używasz hooka shella do `mise`, uruchamiaj komendy przez `mise exec -- ...`.
 
-### 3) Uruchom lokalny PostgreSQL i przygotuj bazę
+### 3) Wybierz backend bazy
+
+#### Opcja A: SQLite (najprostszy start lokalny)
+
+Nie wymaga osobnej instalacji serwera bazy. Ustaw:
+
+```sh
+DATABASE_URL=sqlite://./.data/ksef.db
+```
+
+Serwer utworzy plik DB i odpali migracje automatycznie.
+
+#### Opcja B: PostgreSQL
 
 #### Ubuntu/Debian
 
@@ -203,7 +218,7 @@ mise exec -- cargo run -p ksef-server
 ```
 
 Dashboard: `http://localhost:3000`  
-Migracje uruchamiają się automatycznie przy starcie.  
+Migracje uruchamiają się automatycznie przy starcie (SQLite i PostgreSQL).  
 Certyfikat jest auto-generowany dla środowisk `test` i `demo`.
 
 ### Opcjonalnie: PostgreSQL przez Docker Compose
@@ -229,7 +244,7 @@ Well-known NIP `5260250274` (Ministerstwo Finansów) works out of the box on san
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DATABASE_URL` | yes | — | PostgreSQL connection string |
+| `DATABASE_URL` | yes | — | Database URL (`sqlite://...` or `postgres://...`) |
 | `KSEF_NIP` | yes | — | Your company NIP (10 digits) |
 | `KSEF_ENVIRONMENT` | no | `test` | `test`, `demo`, or `production` |
 | `KSEF_AUTH_METHOD` | no | `xades` | `xades` or `token` |
@@ -249,6 +264,9 @@ See [docs/test-cert-howto.md](docs/test-cert-howto.md) for details.
 ```sh
 # Unit tests (~148 tests, no dependencies)
 cargo test -p ksef-core --lib
+
+# SQLite integration tests (no external DB required)
+cargo test -p ksef-core --test sqlite_integration
 
 # PostgreSQL integration tests (needs PostgreSQL running)
 cargo test -p ksef-core --test pg_integration
