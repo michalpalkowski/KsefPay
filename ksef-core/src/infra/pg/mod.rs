@@ -8,12 +8,16 @@ use crate::domain::environment::KSeFEnvironment;
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
 use crate::domain::job::{Job, JobId};
 use crate::domain::nip::Nip;
+use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
+use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use crate::ports::job_queue::JobQueue;
+use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
+use crate::ports::user_repository::UserRepository;
 
 /// Run all migrations against the given pool.
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -32,6 +36,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../migrations/004_nullable_payment_fields.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/005_multi_tenant_auth.sql"
     ))
     .execute(pool)
     .await?;
@@ -167,6 +176,63 @@ impl SessionRepository for Db {
     }
     async fn terminate_session(&self, session_id: uuid::Uuid) -> Result<(), RepositoryError> {
         queries::session::terminate_session(&self.pool, session_id).await
+    }
+}
+
+// --- Db: UserRepository ---
+
+#[async_trait]
+impl UserRepository for Db {
+    async fn create(&self, user: &User) -> Result<UserId, RepositoryError> {
+        queries::user::create(&self.pool, user).await
+    }
+    async fn find_by_id(&self, id: &UserId) -> Result<User, RepositoryError> {
+        queries::user::find_by_id(&self.pool, id).await
+    }
+    async fn find_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError> {
+        queries::user::find_by_email(&self.pool, email).await
+    }
+}
+
+// --- Db: NipAccountRepository ---
+
+#[async_trait]
+impl NipAccountRepository for Db {
+    async fn create(&self, account: &NipAccount) -> Result<NipAccountId, RepositoryError> {
+        queries::nip_account::create(&self.pool, account).await
+    }
+    async fn find_by_id(&self, id: &NipAccountId) -> Result<NipAccount, RepositoryError> {
+        queries::nip_account::find_by_id(&self.pool, id).await
+    }
+    async fn find_by_nip(&self, nip: &Nip) -> Result<Option<NipAccount>, RepositoryError> {
+        queries::nip_account::find_by_nip(&self.pool, nip).await
+    }
+    async fn update_credentials(&self, account: &NipAccount) -> Result<(), RepositoryError> {
+        queries::nip_account::update_credentials(&self.pool, account).await
+    }
+    async fn grant_access(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError> {
+        queries::nip_account::grant_access(&self.pool, user_id, account_id).await
+    }
+    async fn revoke_access(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError> {
+        queries::nip_account::revoke_access(&self.pool, user_id, account_id).await
+    }
+    async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
+        queries::nip_account::list_by_user(&self.pool, user_id).await
+    }
+    async fn has_access(
+        &self,
+        user_id: &UserId,
+        nip: &Nip,
+    ) -> Result<Option<NipAccount>, RepositoryError> {
+        queries::nip_account::has_access(&self.pool, user_id, nip).await
     }
 }
 
@@ -335,6 +401,85 @@ impl SessionRepository for Tx {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::session::terminate_session(&mut **tx, session_id).await
+    }
+}
+
+// --- Tx: UserRepository ---
+
+#[async_trait]
+impl UserRepository for Tx {
+    async fn create(&self, user: &User) -> Result<UserId, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::user::create(&mut **tx, user).await
+    }
+    async fn find_by_id(&self, id: &UserId) -> Result<User, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::user::find_by_id(&mut **tx, id).await
+    }
+    async fn find_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::user::find_by_email(&mut **tx, email).await
+    }
+}
+
+// --- Tx: NipAccountRepository ---
+
+#[async_trait]
+impl NipAccountRepository for Tx {
+    async fn create(&self, account: &NipAccount) -> Result<NipAccountId, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::create(&mut **tx, account).await
+    }
+    async fn find_by_id(&self, id: &NipAccountId) -> Result<NipAccount, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::find_by_id(&mut **tx, id).await
+    }
+    async fn find_by_nip(&self, nip: &Nip) -> Result<Option<NipAccount>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::find_by_nip(&mut **tx, nip).await
+    }
+    async fn update_credentials(&self, account: &NipAccount) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::update_credentials(&mut **tx, account).await
+    }
+    async fn grant_access(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::grant_access(&mut **tx, user_id, account_id).await
+    }
+    async fn revoke_access(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::revoke_access(&mut **tx, user_id, account_id).await
+    }
+    async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::list_by_user(&mut **tx, user_id).await
+    }
+    async fn has_access(
+        &self,
+        user_id: &UserId,
+        nip: &Nip,
+    ) -> Result<Option<NipAccount>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::has_access(&mut **tx, user_id, nip).await
     }
 }
 

@@ -14,6 +14,8 @@ pub mod ksef_peppol;
 pub mod ksef_permissions;
 pub mod ksef_rate_limits;
 pub mod ksef_tokens;
+pub mod nip_account_repository;
 pub mod qr_renderer;
 pub mod session_repository;
 pub mod transaction;
+pub mod user_repository;
