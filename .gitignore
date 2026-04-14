@@ -1,0 +1,8 @@
+/target
+.env
+*.swp
+*.swo
+.DS_Store
+.tmp/
+.claude/
+compass_artifact_*
