@@ -17,5 +17,6 @@ pub mod ksef_tokens;
 pub mod nip_account_repository;
 pub mod qr_renderer;
 pub mod session_repository;
+pub mod signer_factory;
 pub mod transaction;
 pub mod user_repository;

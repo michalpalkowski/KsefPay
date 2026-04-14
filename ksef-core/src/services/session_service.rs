@@ -11,7 +11,9 @@ use crate::error::{CryptoError, KSeFError, RepositoryError};
 use crate::ports::encryption::XadesSigner;
 use crate::ports::ksef_auth::KSeFAuth;
 use crate::ports::ksef_client::KSeFClient;
+use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
+use crate::ports::signer_factory::{SignerCredentials, SignerFactory};
 
 const AUTH_POLL_MAX_ATTEMPTS: usize = 10;
 #[cfg(not(test))]
@@ -23,6 +25,8 @@ const AUTH_POLL_DELAY: std::time::Duration = std::time::Duration::from_millis(1)
 pub struct SessionService {
     auth: Arc<dyn KSeFAuth>,
     signer: Arc<dyn XadesSigner>,
+    signer_factory: Option<Arc<dyn SignerFactory>>,
+    nip_account_repo: Option<Arc<dyn NipAccountRepository>>,
     client: Arc<dyn KSeFClient>,
     repo: Arc<dyn SessionRepository>,
     environment: KSeFEnvironment,
@@ -77,6 +81,36 @@ impl SessionService {
         Self {
             auth,
             signer,
+            signer_factory: None,
+            nip_account_repo: None,
+            client,
+            repo,
+            environment,
+            auth_method,
+        }
+    }
+
+    /// Create with a per-NIP signer factory for multi-tenant mode.
+    ///
+    /// When `signer_factory` + `nip_account_repo` are set, `authenticate()`
+    /// loads the cert from the NIP account and creates a per-NIP signer
+    /// instead of using the global fallback.
+    #[must_use]
+    pub fn with_signer_factory(
+        auth: Arc<dyn KSeFAuth>,
+        fallback_signer: Arc<dyn XadesSigner>,
+        signer_factory: Arc<dyn SignerFactory>,
+        nip_account_repo: Arc<dyn NipAccountRepository>,
+        client: Arc<dyn KSeFClient>,
+        repo: Arc<dyn SessionRepository>,
+        environment: KSeFEnvironment,
+        auth_method: AuthMethod,
+    ) -> Self {
+        Self {
+            auth,
+            signer: fallback_signer,
+            signer_factory: Some(signer_factory),
+            nip_account_repo: Some(nip_account_repo),
             client,
             repo,
             environment,
@@ -104,12 +138,45 @@ impl SessionService {
             .is_some()
     }
 
+    /// Resolve the signer for a NIP: factory with per-NIP cert, or global fallback.
+    async fn resolve_signer(&self, nip: &Nip) -> Result<Arc<dyn XadesSigner>, SessionServiceError> {
+        let (Some(factory), Some(nip_repo)) =
+            (&self.signer_factory, &self.nip_account_repo)
+        else {
+            return Ok(self.signer.clone());
+        };
+
+        // Load cert from NIP account if stored
+        let account = nip_repo.find_by_nip(nip).await?;
+        let credentials = match account {
+            Some(ref acc) if acc.cert_pem.is_some() && acc.key_pem.is_some() => {
+                SignerCredentials::Pem {
+                    cert_pem: acc.cert_pem.as_ref().unwrap(),
+                    key_pem: acc.key_pem.as_ref().unwrap(),
+                }
+            }
+            _ => {
+                if self.environment == KSeFEnvironment::Production {
+                    return Err(SessionServiceError::AuthFailed(format!(
+                        "no certificate stored for NIP {nip} — required in production"
+                    )));
+                }
+                SignerCredentials::AutoGenerate
+            }
+        };
+
+        factory
+            .create_signer(nip, credentials)
+            .map_err(SessionServiceError::Crypto)
+    }
+
     /// Full auth flow: challenge -> sign -> submit -> poll -> redeem -> persist.
     pub async fn authenticate(&self, nip: &Nip) -> Result<TokenPair, SessionServiceError> {
         let auth_ref = match &self.auth_method {
             AuthMethod::Xades => {
+                let signer = self.resolve_signer(nip).await?;
                 let challenge = self.auth.request_challenge(nip).await?;
-                let signed = self.signer.sign_auth_request(&challenge, nip).await?;
+                let signed = signer.sign_auth_request(&challenge, nip).await?;
                 self.auth.authenticate_xades(&signed).await?
             }
             AuthMethod::Token { context, token } => {

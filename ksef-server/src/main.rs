@@ -11,7 +11,7 @@ use tower_sessions::cookie::time::Duration as CookieDuration;
 use tracing_subscriber::EnvFilter;
 
 use ksef_core::infra::batch::zip_builder::BatchFileBuilder;
-use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslXadesSigner};
+use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslSignerFactory, OpenSslXadesSigner};
 use ksef_core::infra::fa3::Fa3XmlConverter;
 use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
@@ -99,7 +99,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(TokenBucketRateLimiter::default()),
         RetryPolicy::default(),
     ));
-    let signer = Arc::new(load_signer(&config)?);
+    // Fallback signer for backward compat (uses KSEF_NIP from env if set)
+    let fallback_signer = Arc::new(load_signer(&config)?);
+    let signer_factory = Arc::new(OpenSslSignerFactory);
     let auth_method = match config.ksef_auth_method.trim().to_ascii_lowercase().as_str() {
         "xades" => AuthMethod::Xades,
         "token" => {
@@ -117,9 +119,11 @@ async fn main() -> anyhow::Result<()> {
             ));
         }
     };
-    let session_service = Arc::new(SessionService::with_auth_method(
+    let session_service = Arc::new(SessionService::with_signer_factory(
         ksef.clone(),
-        signer,
+        fallback_signer,
+        signer_factory,
+        db.nip_account_repo.clone(),
         ksef.clone(),
         db.session_repo.clone(),
         config.ksef_environment,
