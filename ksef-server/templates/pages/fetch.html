@@ -17,7 +17,7 @@
   <div class="alert alert-error">{{ err }}</div>
   {% endif %}
 
-  <form method="post" action="/invoices/fetch" class="form-stack">
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="form-stack">
     <div class="form-row">
       <div class="form-group">
         <label for="date_from">Data od</label>
@@ -48,7 +48,7 @@
 
     <div class="form-actions">
       <button type="submit" class="btn btn-primary" id="fetch-btn">Pobierz</button>
-      <a href="/invoices" class="btn btn-secondary">Anuluj</a>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-secondary">Anuluj</a>
     </div>
   </form>
 </div>

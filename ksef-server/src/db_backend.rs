@@ -7,8 +7,10 @@ use anyhow::Context;
 use ksef_core::infra::{pg, sqlite};
 use ksef_core::ports::invoice_repository::InvoiceRepository;
 use ksef_core::ports::job_queue::JobQueue;
+use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::session_repository::SessionRepository;
 use ksef_core::ports::transaction::AtomicScopeFactory;
+use ksef_core::ports::user_repository::UserRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +26,8 @@ pub struct DatabasePorts {
     pub job_queue: Arc<dyn JobQueue>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub atomic_scope_factory: Arc<dyn AtomicScopeFactory>,
+    pub user_repo: Arc<dyn UserRepository>,
+    pub nip_account_repo: Arc<dyn NipAccountRepository>,
 }
 
 pub fn detect_backend_kind(database_url: &str) -> anyhow::Result<DatabaseBackendKind> {
@@ -62,15 +66,15 @@ fn ensure_sqlite_parent_dir(database_url: &str) -> anyhow::Result<()> {
     }
 
     let path = Path::new(path_without_query);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create parent directory for sqlite database at '{}'",
-                    parent.display()
-                )
-            })?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create parent directory for sqlite database at '{}'",
+                parent.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -99,6 +103,8 @@ async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
     let invoice_repo: Arc<dyn InvoiceRepository> = db.clone();
     let job_queue: Arc<dyn JobQueue> = db.clone();
     let session_repo: Arc<dyn SessionRepository> = db.clone();
+    let user_repo: Arc<dyn UserRepository> = db.clone();
+    let nip_account_repo: Arc<dyn NipAccountRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -107,6 +113,8 @@ async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
         job_queue,
         session_repo,
         atomic_scope_factory,
+        user_repo,
+        nip_account_repo,
     })
 }
 
@@ -138,6 +146,8 @@ async fn connect_sqlite(database_url: &str) -> anyhow::Result<DatabasePorts> {
     let invoice_repo: Arc<dyn InvoiceRepository> = db.clone();
     let job_queue: Arc<dyn JobQueue> = db.clone();
     let session_repo: Arc<dyn SessionRepository> = db.clone();
+    let user_repo: Arc<dyn UserRepository> = db.clone();
+    let nip_account_repo: Arc<dyn NipAccountRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -146,6 +156,8 @@ async fn connect_sqlite(database_url: &str) -> anyhow::Result<DatabasePorts> {
         job_queue,
         session_repo,
         atomic_scope_factory,
+        user_repo,
+        nip_account_repo,
     })
 }
 

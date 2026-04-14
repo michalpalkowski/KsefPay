@@ -15,6 +15,7 @@ use ksef_core::error::RepositoryError;
 use ksef_core::ports::invoice_repository::InvoiceFilter;
 use ksef_core::services::invoice_service::{CreateInvoiceInput, InvoiceServiceError};
 
+use crate::extractors::NipContext;
 use crate::state::AppState;
 
 // --- Templates ---
@@ -23,6 +24,8 @@ use crate::state::AppState;
 #[template(path = "pages/invoices.html")]
 struct InvoiceListTemplate {
     active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
     outgoing: Vec<Invoice>,
     incoming: Vec<Invoice>,
     tab: String,
@@ -32,6 +35,8 @@ struct InvoiceListTemplate {
 #[template(path = "pages/invoice_detail.html")]
 struct InvoiceDetailTemplate {
     active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
     invoice: Invoice,
 }
 
@@ -39,6 +44,8 @@ struct InvoiceDetailTemplate {
 #[template(path = "pages/invoice_new.html")]
 struct InvoiceNewTemplate {
     active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
     error: Option<String>,
     default_nip: String,
     today: String,
@@ -103,8 +110,10 @@ pub struct InvoiceFormData {
 
 pub async fn list(
     State(state): State<AppState>,
+    nip_ctx: NipContext,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let nip_str = nip_ctx.account.nip.to_string();
     let invoices = match state.invoice_service.list(&InvoiceFilter::default()).await {
         Ok(invoices) => invoices,
         Err(err) => {
@@ -127,31 +136,39 @@ pub async fn list(
 
     render(InvoiceListTemplate {
         active: "/invoices",
+        nip_prefix: Some(nip_str),
+        user_email: nip_ctx.user.email,
         outgoing,
         incoming,
         tab,
     })
 }
 
-fn new_form_defaults(state: &AppState) -> InvoiceNewTemplate {
+fn new_form_defaults(nip_ctx: &NipContext) -> InvoiceNewTemplate {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let deadline = (chrono::Local::now() + chrono::Duration::days(14))
         .format("%Y-%m-%d")
         .to_string();
     InvoiceNewTemplate {
         active: "/invoices",
+        nip_prefix: Some(nip_ctx.account.nip.to_string()),
+        user_email: nip_ctx.user.email.clone(),
         error: None,
-        default_nip: state.nip.as_str().to_string(),
+        default_nip: nip_ctx.account.nip.as_str().to_string(),
         today,
         payment_deadline: deadline,
     }
 }
 
-pub async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
-    render(new_form_defaults(&state))
+pub async fn new_form(nip_ctx: NipContext) -> impl IntoResponse {
+    render(new_form_defaults(&nip_ctx))
 }
 
-pub async fn detail(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub async fn detail(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    Path((_nip, id)): Path<(String, String)>,
+) -> Response {
     let invoice_id: InvoiceId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -166,6 +183,8 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<String>) -> Re
     match state.invoice_service.find(&invoice_id).await {
         Ok(invoice) => render(InvoiceDetailTemplate {
             active: "/invoices",
+            nip_prefix: Some(nip_ctx.account.nip.to_string()),
+            user_email: nip_ctx.user.email,
             invoice,
         })
         .into_response(),
@@ -177,25 +196,38 @@ pub async fn detail(State(state): State<AppState>, Path(id): Path<String>) -> Re
     }
 }
 
-pub async fn create(State(state): State<AppState>, Form(form): Form<InvoiceFormData>) -> Response {
+pub async fn create(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    Form(form): Form<InvoiceFormData>,
+) -> Response {
+    let nip_str = nip_ctx.account.nip.to_string();
     match parse_form_to_input(form) {
         Ok(input) => match state.invoice_service.create_draft(input).await {
-            Ok(invoice) => Redirect::to(&format!("/invoices/{}", invoice.id)).into_response(),
+            Ok(invoice) => {
+                Redirect::to(&format!("/accounts/{nip_str}/invoices/{}", invoice.id))
+                    .into_response()
+            }
             Err(e) => {
-                let mut tmpl = new_form_defaults(&state);
+                let mut tmpl = new_form_defaults(&nip_ctx);
                 tmpl.error = Some(format!("Nie udalo sie utworzyc faktury: {e}"));
                 render_with_status(status_for_service_error(&e), tmpl)
             }
         },
         Err(e) => {
-            let mut tmpl = new_form_defaults(&state);
+            let mut tmpl = new_form_defaults(&nip_ctx);
             tmpl.error = Some(e);
             render_with_status(StatusCode::BAD_REQUEST, tmpl)
         }
     }
 }
 
-pub async fn submit(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub async fn submit(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    Path((_nip, id)): Path<(String, String)>,
+) -> Response {
+    let nip_str = nip_ctx.account.nip.to_string();
     let invoice_id: InvoiceId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -208,7 +240,9 @@ pub async fn submit(State(state): State<AppState>, Path(id): Path<String>) -> Re
     };
 
     match state.invoice_service.submit(&invoice_id).await {
-        Ok(()) => Redirect::to(&format!("/invoices/{invoice_id}")).into_response(),
+        Ok(()) => {
+            Redirect::to(&format!("/accounts/{nip_str}/invoices/{invoice_id}")).into_response()
+        }
         Err(err) => (
             status_for_service_error(&err),
             format!("Nie udalo sie wyslac faktury {invoice_id} do kolejki: {err}"),

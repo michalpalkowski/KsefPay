@@ -1,0 +1,38 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Logowanie - KSeF PayMoney</title>
+{% endblock %}
+
+{% block navbar %}{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>Logowanie</h1>
+    <p class="page-copy">Zaloguj sie do KSeF PayMoney</p>
+  </div>
+
+  {% if let Some(msg) = error %}
+  <div class="alert alert-error">{{ msg }}</div>
+  {% endif %}
+
+  <form method="post" action="/login">
+    <div class="form-row">
+      <label for="email">Email</label>
+      <input type="email" name="email" id="email" placeholder="twoj@email.pl" required autofocus />
+    </div>
+    <div class="form-row">
+      <label for="password">Haslo</label>
+      <input type="password" name="password" id="password" required />
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Zaloguj sie</button>
+    </div>
+  </form>
+
+  <p class="page-copy" style="margin-top: 1rem;">
+    Nie masz konta? <a href="/register">Zarejestruj sie</a>
+  </p>
+</div>
+{% endblock %}

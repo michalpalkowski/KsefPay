@@ -20,8 +20,11 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
+argon2.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-sessions = "0.14"
+tower-sessions-sqlx-store = { version = "0.15", features = ["postgres", "sqlite"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

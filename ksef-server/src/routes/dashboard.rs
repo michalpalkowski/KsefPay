@@ -5,12 +5,15 @@ use axum::response::{Html, IntoResponse, Response};
 
 use ksef_core::ports::invoice_repository::InvoiceFilter;
 
+use crate::extractors::NipContext;
 use crate::state::AppState;
 
 #[derive(Template)]
 #[template(path = "pages/dashboard.html")]
 struct DashboardTemplate {
     active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
     total_invoices: usize,
     draft_count: usize,
     queued_count: usize,
@@ -18,7 +21,8 @@ struct DashboardTemplate {
     failed_count: usize,
 }
 
-pub async fn dashboard(State(state): State<AppState>) -> Response {
+pub async fn dashboard(State(state): State<AppState>, nip_ctx: NipContext) -> Response {
+    let nip_str = nip_ctx.account.nip.to_string();
     let all = match state.invoice_service.list(&InvoiceFilter::default()).await {
         Ok(invoices) => invoices,
         Err(err) => {
@@ -61,6 +65,8 @@ pub async fn dashboard(State(state): State<AppState>) -> Response {
 
     let tmpl = DashboardTemplate {
         active: "/",
+        nip_prefix: Some(nip_str),
+        user_email: nip_ctx.user.email,
         total_invoices: all.len(),
         draft_count,
         queued_count,
@@ -86,6 +92,8 @@ mod tests {
     fn template_renders_with_zero_counts() {
         let tmpl = DashboardTemplate {
             active: "/",
+            nip_prefix: Some("5260250274".to_string()),
+            user_email: "test@example.com".to_string(),
             total_invoices: 0,
             draft_count: 0,
             queued_count: 0,
@@ -100,6 +108,8 @@ mod tests {
     fn template_renders_counts_correctly() {
         let tmpl = DashboardTemplate {
             active: "/",
+            nip_prefix: Some("5260250274".to_string()),
+            user_email: "test@example.com".to_string(),
             total_invoices: 42,
             draft_count: 5,
             queued_count: 3,

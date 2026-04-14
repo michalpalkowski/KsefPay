@@ -52,8 +52,8 @@
   {% endif %}
 
   <div class="form-actions">
-    <a href="/invoices/fetch" class="btn">Pobierz ponownie</a>
-    <a href="/invoices" class="btn btn-primary">Lista faktur</a>
+    <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="btn">Pobierz ponownie</a>
+    <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-primary">Lista faktur</a>
   </div>
 </div>
 {% endblock %}
