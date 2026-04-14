@@ -201,12 +201,15 @@ impl KSeFTokens for HttpKSeFTokens {
             .iter()
             .map(ToString::to_string)
             .collect();
-        let mut body = serde_json::json!({
+        let description = request
+            .description
+            .as_deref()
+            .filter(|s| s.len() >= 5)
+            .unwrap_or("Token wygenerowany przez ksef-paymoney");
+        let body = serde_json::json!({
             "permissions": permissions,
+            "description": description,
         });
-        if let Some(ref desc) = request.description {
-            body["description"] = serde_json::Value::String(desc.clone());
-        }
 
         let response = self
             .http
