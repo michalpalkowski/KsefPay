@@ -1,0 +1,363 @@
+mod queries;
+
+use async_trait::async_trait;
+use sqlx::{Sqlite, SqlitePool, Transaction};
+use tokio::sync::Mutex;
+
+use crate::domain::environment::KSeFEnvironment;
+use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
+use crate::domain::job::{Job, JobId};
+use crate::domain::nip::Nip;
+use crate::domain::session::KSeFNumber;
+use crate::error::{QueueError, RepositoryError};
+use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
+use crate::ports::job_queue::JobQueue;
+use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
+use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
+
+/// Run all SQLite migrations against the given pool.
+pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/001_initial_schema.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/002_fetched_status_and_raw_xml.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/003_invoice_type_and_corrections.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/004_nullable_payment_fields.sql"
+    ))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// SQLite database handle. Implements all repository/queue/session ports.
+#[derive(Clone)]
+pub struct Db {
+    pool: SqlitePool,
+}
+
+impl Db {
+    #[must_use]
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    #[must_use]
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub async fn tx(&self) -> Result<Tx, RepositoryError> {
+        let transaction = self.pool.begin().await.map_err(RepositoryError::Database)?;
+        Ok(Tx {
+            inner: Mutex::new(Some(transaction)),
+        })
+    }
+}
+
+#[async_trait]
+impl InvoiceRepository for Db {
+    async fn save(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
+        queries::invoice::save(&self.pool, invoice).await
+    }
+
+    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
+        queries::invoice::find_by_id(&self.pool, id).await
+    }
+
+    async fn update_status(
+        &self,
+        id: &InvoiceId,
+        status: InvoiceStatus,
+    ) -> Result<(), RepositoryError> {
+        queries::invoice::update_status(&self.pool, id, status).await
+    }
+
+    async fn set_ksef_number(
+        &self,
+        id: &InvoiceId,
+        ksef_number: &str,
+    ) -> Result<(), RepositoryError> {
+        queries::invoice::set_ksef_number(&self.pool, id, ksef_number).await
+    }
+
+    async fn set_ksef_error(&self, id: &InvoiceId, error: &str) -> Result<(), RepositoryError> {
+        queries::invoice::set_ksef_error(&self.pool, id, error).await
+    }
+
+    async fn find_by_ksef_number(
+        &self,
+        ksef_number: &KSeFNumber,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        queries::invoice::find_by_ksef_number(&self.pool, ksef_number).await
+    }
+
+    async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
+        queries::invoice::upsert_by_ksef_number(&self.pool, invoice).await
+    }
+
+    async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError> {
+        queries::invoice::list(&self.pool, filter).await
+    }
+}
+
+#[async_trait]
+impl JobQueue for Db {
+    async fn enqueue(&self, job: Job) -> Result<JobId, QueueError> {
+        queries::job::enqueue(&self.pool, &job).await
+    }
+
+    async fn dequeue(&self) -> Result<Option<Job>, QueueError> {
+        queries::job::dequeue(&self.pool).await
+    }
+
+    async fn complete(&self, id: &JobId) -> Result<(), QueueError> {
+        queries::job::complete(&self.pool, id).await
+    }
+
+    async fn fail(&self, id: &JobId, error: &str) -> Result<(), QueueError> {
+        queries::job::fail(&self.pool, id, error).await
+    }
+
+    async fn dead_letter(&self, id: &JobId, error: &str) -> Result<(), QueueError> {
+        queries::job::dead_letter(&self.pool, id, error).await
+    }
+
+    async fn list_pending(&self) -> Result<Vec<Job>, QueueError> {
+        queries::job::list_pending(&self.pool).await
+    }
+
+    async fn list_dead_letter(&self) -> Result<Vec<Job>, QueueError> {
+        queries::job::list_dead_letter(&self.pool).await
+    }
+}
+
+#[async_trait]
+impl SessionRepository for Db {
+    async fn save_token_pair(&self, token: &StoredTokenPair) -> Result<(), RepositoryError> {
+        queries::session::save_token_pair(&self.pool, token).await
+    }
+
+    async fn find_active_token(
+        &self,
+        nip: &Nip,
+        env: KSeFEnvironment,
+    ) -> Result<Option<StoredTokenPair>, RepositoryError> {
+        queries::session::find_active_token(&self.pool, nip, env).await
+    }
+
+    async fn save_session(&self, session: &StoredSession) -> Result<(), RepositoryError> {
+        queries::session::save_session(&self.pool, session).await
+    }
+
+    async fn find_active_session(
+        &self,
+        nip: &Nip,
+        env: KSeFEnvironment,
+    ) -> Result<Option<StoredSession>, RepositoryError> {
+        queries::session::find_active_session(&self.pool, nip, env).await
+    }
+
+    async fn terminate_session(&self, session_id: uuid::Uuid) -> Result<(), RepositoryError> {
+        queries::session::terminate_session(&self.pool, session_id).await
+    }
+}
+
+pub struct Tx {
+    inner: Mutex<Option<Transaction<'static, Sqlite>>>,
+}
+
+impl Tx {
+    pub async fn commit(self) -> Result<(), RepositoryError> {
+        let opt = self.inner.into_inner();
+        let transaction = opt.expect("tx already committed");
+        sqlx::Transaction::commit(transaction)
+            .await
+            .map_err(RepositoryError::Database)
+    }
+
+    async fn conn(&self) -> tokio::sync::MutexGuard<'_, Option<Transaction<'static, Sqlite>>> {
+        let guard = self.inner.lock().await;
+        assert!(guard.is_some(), "transaction already committed");
+        guard
+    }
+}
+
+#[async_trait]
+impl InvoiceRepository for Tx {
+    async fn save(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::save(&mut **tx, invoice).await
+    }
+
+    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::find_by_id(&mut **tx, id).await
+    }
+
+    async fn update_status(
+        &self,
+        id: &InvoiceId,
+        status: InvoiceStatus,
+    ) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::update_status(&mut **tx, id, status).await
+    }
+
+    async fn set_ksef_number(
+        &self,
+        id: &InvoiceId,
+        ksef_number: &str,
+    ) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::set_ksef_number(&mut **tx, id, ksef_number).await
+    }
+
+    async fn set_ksef_error(&self, id: &InvoiceId, error: &str) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::set_ksef_error(&mut **tx, id, error).await
+    }
+
+    async fn find_by_ksef_number(
+        &self,
+        ksef_number: &KSeFNumber,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::find_by_ksef_number(&mut **tx, ksef_number).await
+    }
+
+    async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::upsert_by_ksef_number(&mut **tx, invoice).await
+    }
+
+    async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::list(&mut **tx, filter).await
+    }
+}
+
+#[async_trait]
+impl JobQueue for Tx {
+    async fn enqueue(&self, job: Job) -> Result<JobId, QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::enqueue(&mut **tx, &job).await
+    }
+
+    async fn dequeue(&self) -> Result<Option<Job>, QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::dequeue(&mut **tx).await
+    }
+
+    async fn complete(&self, id: &JobId) -> Result<(), QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::complete(&mut **tx, id).await
+    }
+
+    async fn fail(&self, id: &JobId, error: &str) -> Result<(), QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::fail(&mut **tx, id, error).await
+    }
+
+    async fn dead_letter(&self, id: &JobId, error: &str) -> Result<(), QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::dead_letter(&mut **tx, id, error).await
+    }
+
+    async fn list_pending(&self) -> Result<Vec<Job>, QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::list_pending(&mut **tx).await
+    }
+
+    async fn list_dead_letter(&self) -> Result<Vec<Job>, QueueError> {
+        let mut guard = self.inner.lock().await;
+        let tx = guard.as_mut().expect("tx already committed");
+        queries::job::list_dead_letter(&mut **tx).await
+    }
+}
+
+#[async_trait]
+impl SessionRepository for Tx {
+    async fn save_token_pair(&self, token: &StoredTokenPair) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::session::save_token_pair(&mut **tx, token).await
+    }
+
+    async fn find_active_token(
+        &self,
+        nip: &Nip,
+        env: KSeFEnvironment,
+    ) -> Result<Option<StoredTokenPair>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::session::find_active_token(&mut **tx, nip, env).await
+    }
+
+    async fn save_session(&self, session: &StoredSession) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::session::save_session(&mut **tx, session).await
+    }
+
+    async fn find_active_session(
+        &self,
+        nip: &Nip,
+        env: KSeFEnvironment,
+    ) -> Result<Option<StoredSession>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::session::find_active_session(&mut **tx, nip, env).await
+    }
+
+    async fn terminate_session(&self, session_id: uuid::Uuid) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::session::terminate_session(&mut **tx, session_id).await
+    }
+}
+
+#[async_trait]
+impl AtomicScope for Tx {
+    async fn commit(self: Box<Self>) -> Result<(), RepositoryError> {
+        let opt = self.inner.into_inner();
+        let transaction = opt.expect("tx already committed");
+        sqlx::Transaction::commit(transaction)
+            .await
+            .map_err(RepositoryError::Database)
+    }
+}
+
+#[async_trait]
+impl AtomicScopeFactory for Db {
+    async fn begin(&self) -> Result<Box<dyn AtomicScope>, RepositoryError> {
+        let transaction = self.pool.begin().await.map_err(RepositoryError::Database)?;
+        Ok(Box::new(Tx {
+            inner: Mutex::new(Some(transaction)),
+        }))
+    }
+}

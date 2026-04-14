@@ -5,4 +5,5 @@ pub mod http;
 pub mod ksef;
 pub mod pg;
 pub mod qr;
+pub mod sqlite;
 pub mod validation;
