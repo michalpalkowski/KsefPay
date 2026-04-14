@@ -92,7 +92,7 @@ W `.env` ustaw przynajmniej:
 
 ```
 DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef
-KSEF_NIP=5260250274 (Ministerstwo Finansów) 
+KSEF_NIP=5260250274
 ```
 
 ### 2) Włącz automatyczne ładowanie `.env` przez mise
@@ -108,17 +108,47 @@ Po jednorazowym `mise trust` zmienne z `.env` będą automatycznie dostępne w s
 
 ### 3) Uruchom lokalny PostgreSQL i przygotuj bazę
 
-Uruchom usługę PostgreSQL (bez `docker compose`), np.:
+#### Ubuntu/Debian
 
 ```sh
-# macOS (Homebrew)
-brew services start postgresql@17 || brew services start postgresql
+# instalacja (jednorazowo)
+sudo apt update
+sudo apt install -y postgresql postgresql-contrib postgresql-common postgresql-client
 
-# Linux (systemd)
-sudo systemctl start postgresql
+# start klastra (codziennie po restarcie systemu, jeśli jest down)
+pg_lsclusters
+sudo pg_ctlcluster 16 main start   # podmień 16/main zgodnie z wynikiem pg_lsclusters
 ```
 
-Utwórz użytkownika i bazę zgodne z domyślnym `DATABASE_URL` z `.env.example`:
+Jednorazowy setup użytkownika/bazy:
+
+```sh
+sudo -u postgres psql -d postgres <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ksef') THEN
+    CREATE ROLE ksef LOGIN PASSWORD 'ksef';
+  END IF;
+END
+$$;
+ALTER ROLE ksef WITH LOGIN PASSWORD 'ksef';
+SQL
+
+sudo -u postgres createdb -O ksef ksef 2>/dev/null || true
+psql "postgres://ksef:ksef@localhost:5432/ksef" -c "select 1;"
+```
+
+#### macOS (Homebrew)
+
+```sh
+# instalacja (jednorazowo)
+brew install postgresql@16
+
+# start usługi
+brew services start postgresql@16
+```
+
+Jednorazowy setup użytkownika/bazy:
 
 ```sh
 psql -d postgres <<'SQL'
@@ -135,6 +165,8 @@ SQL
 createdb -O ksef ksef 2>/dev/null || true
 psql "postgres://ksef:ksef@localhost:5432/ksef" -c "select 1;"
 ```
+
+Po tym setupie na co dzień wystarczy tylko upewnić się, że PostgreSQL działa.
 
 ### 4) Wygeneruj testowy NIP (opcjonalnie)
 
