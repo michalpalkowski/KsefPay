@@ -1,0 +1,53 @@
+{% extends "layouts/app.html" %}
+{% import "macros/alerts.html" as alerts %}
+
+{% block head %}
+<title>Sesje - KSeF PayMoney</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <div>
+      <h1>Sesje KSeF</h1>
+      <p class="page-copy">Uwierzytelnienie i zarzadzanie sesjami</p>
+    </div>
+  </div>
+
+  {% call alerts::alerts(error, success) %}{% endcall %}
+
+  <div class="stats-grid">
+    <div class="stat-card {% if has_token %}stat-accepted{% else %}stat-draft{% endif %}">
+      <span class="stat-value">{% if has_token %}&#10003;{% else %}&#10007;{% endif %}</span>
+      <span class="stat-label">Token KSeF</span>
+    </div>
+    <div class="stat-card {% if has_session %}stat-accepted{% else %}stat-draft{% endif %}">
+      <span class="stat-value">{% if has_session %}&#10003;{% else %}&#8211;{% endif %}</span>
+      <span class="stat-label">Sesja online</span>
+    </div>
+  </div>
+
+  <p class="page-copy" style="margin-bottom: 1rem;">
+    {% if has_token && has_session %}
+      Uwierzytelniony w KSeF, sesja online otwarta.
+    {% elif has_token %}
+      Uwierzytelniony w KSeF. Sesja online otwiera sie automatycznie przy wysylaniu faktury.
+    {% else %}
+      Brak uwierzytelnienia. Kliknij Uwierzytelnij aby uzyskac token dostepu KSeF.
+    {% endif %}
+  </p>
+
+  <div class="actions">
+    <form method="post" action="/sessions/authenticate">
+      <button type="submit" class="btn btn-primary">
+        {% if has_token %}Odnow token{% else %}Uwierzytelnij{% endif %}
+      </button>
+    </form>
+    {% if has_session %}
+    <form method="post" action="/sessions/close" onsubmit="return confirm('Czy na pewno chcesz zamknac sesje online?')">
+      <button type="submit" class="btn btn-danger">Zamknij sesje online</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

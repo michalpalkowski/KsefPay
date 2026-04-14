@@ -1,0 +1,26 @@
+{% macro permission_select(id, name) %}
+<select id="{{ id }}" name="{{ name }}">
+  <option value="InvoiceRead">Odczyt faktur</option>
+  <option value="InvoiceWrite">Wystawianie faktur</option>
+  <option value="CredentialsRead">Odczyt uprawnien</option>
+  <option value="CredentialsManage">Zarzadzanie uprawnieniami</option>
+  <option value="SubunitManage">Zarzadzanie podjednostkami</option>
+  <option value="EnforcementOperations">Operacje egzekucyjne</option>
+  <option value="Introspection">Introspekcja</option>
+</select>
+{% endmacro %}
+
+{% macro subject_type_select(id, name) %}
+<select id="{{ id }}" name="{{ name }}">
+  <option value="subject1">Wystawione (sprzedawca)</option>
+  <option value="subject2" selected>Otrzymane (nabywca)</option>
+  <option value="subject3">Trzecia strona</option>
+</select>
+{% endmacro %}
+
+{% macro nip_input(id, name, label) %}
+<div class="form-group">
+  <label for="{{ id }}">{{ label }}</label>
+  <input type="text" id="{{ id }}" name="{{ name }}" required pattern="\d{10}" placeholder="1234567890" />
+</div>
+{% endmacro %}

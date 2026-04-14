@@ -1,0 +1,20 @@
+{% macro error_alert(error) %}
+{% if let Some(msg) = error %}
+<div class="alert alert-error">{{ msg }}</div>
+{% endif %}
+{% endmacro %}
+
+{% macro success_alert(success) %}
+{% if let Some(msg) = success %}
+<div class="alert alert-success">{{ msg }}</div>
+{% endif %}
+{% endmacro %}
+
+{% macro alerts(error, success) %}
+{% if let Some(msg) = error %}
+<div class="alert alert-error">{{ msg }}</div>
+{% endif %}
+{% if let Some(msg) = success %}
+<div class="alert alert-success">{{ msg }}</div>
+{% endif %}
+{% endmacro %}

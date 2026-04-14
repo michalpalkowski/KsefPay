@@ -1,0 +1,86 @@
+{% extends "layouts/app.html" %}
+{% import "macros/alerts.html" as alerts %}
+{% import "macros/forms.html" as forms %}
+
+{% block head %}
+<title>Uprawnienia - KSeF PayMoney</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <div>
+      <h1>Uprawnienia KSeF</h1>
+      <p class="page-copy">Nadawanie, odbieranie i przegladanie uprawnien</p>
+    </div>
+  </div>
+  {% call alerts::alerts(error, success) %}{% endcall %}
+</div>
+
+<div class="page-card">
+  <h2>Nadaj uprawnienie</h2>
+  <form method="post" action="/permissions/grant" class="form-stack">
+    <div class="form-row">
+      {% call forms::nip_input("grant_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
+      {% call forms::nip_input("grant_auth", "authorized_nip", "NIP uprawnionego") %}{% endcall %}
+      <div class="form-group">
+        <label for="grant_perm">Typ uprawnienia</label>
+        {% call forms::permission_select("grant_perm", "permission") %}{% endcall %}
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Nadaj</button>
+    </div>
+  </form>
+</div>
+
+<div class="page-card">
+  <h2>Odebierz uprawnienie</h2>
+  <form method="post" action="/permissions/revoke" class="form-stack">
+    <div class="form-row">
+      {% call forms::nip_input("revoke_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
+      {% call forms::nip_input("revoke_auth", "authorized_nip", "NIP uprawnionego") %}{% endcall %}
+      <div class="form-group">
+        <label for="revoke_perm">Typ uprawnienia</label>
+        {% call forms::permission_select("revoke_perm", "permission") %}{% endcall %}
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-danger" onclick="return confirm('Czy na pewno chcesz odebrac uprawnienie?')">Odebierz</button>
+    </div>
+  </form>
+</div>
+
+<div class="page-card">
+  <h2>Zapytanie o uprawnienia</h2>
+  <form method="post" action="/permissions/query" class="form-stack">
+    <div class="form-row">
+      {% call forms::nip_input("query_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-secondary">Szukaj</button>
+    </div>
+  </form>
+
+  {% if !records.is_empty() %}
+  <table class="invoice-table" style="margin-top: 1.25rem;">
+    <thead>
+      <tr>
+        <th>Typ uprawnienia</th>
+        <th>Data nadania</th>
+        <th>Wazne do</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr>
+        <td><span class="status-badge status-accepted">{{ r.permission }}</span></td>
+        <td>{{ r.granted_at }}</td>
+        <td>{% if let Some(v) = r.valid_to %}{{ v }}{% else %}<span style="color: #64748b;">Bezterminowe</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

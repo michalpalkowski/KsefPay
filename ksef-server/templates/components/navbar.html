@@ -1,0 +1,11 @@
+<nav class="navbar" aria-label="Nawigacja">
+  <a href="/" class="navbar-brand">KSeF<span>Pay</span></a>
+  <a href="/" class="{% if active == "/" %}active{% endif %}">Dashboard</a>
+  <a href="/invoices" class="{% if active == "/invoices" %}active{% endif %}">Faktury</a>
+  <a href="/invoices/fetch" class="{% if active == "/fetch" %}active{% endif %}">Pobierz</a>
+  <a href="/export" class="{% if active == "/export" %}active{% endif %}">Eksport</a>
+  <div class="nav-sep"></div>
+  <a href="/sessions" class="{% if active == "/sessions" %}active{% endif %}">Sesje</a>
+  <a href="/permissions" class="{% if active == "/permissions" %}active{% endif %}">Uprawnienia</a>
+  <a href="/tokens" class="{% if active == "/tokens" %}active{% endif %}">Tokeny</a>
+</nav>

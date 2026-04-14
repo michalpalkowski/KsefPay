@@ -1,0 +1,83 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Pobierz z KSeF - KSeF PayMoney</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <div>
+      <h1>Pobierz faktury z KSeF</h1>
+      <p class="page-copy">Pobieranie faktur za wybrany okres i typ podmiotu</p>
+    </div>
+  </div>
+
+  {% if let Some(err) = error %}
+  <div class="alert alert-error">{{ err }}</div>
+  {% endif %}
+
+  <form method="post" action="/invoices/fetch" class="form-stack">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="date_from">Data od</label>
+        <input type="date" id="date_from" name="date_from" value="{{ default_date_from }}" required />
+      </div>
+      <div class="form-group">
+        <label for="date_to">Data do</label>
+        <input type="date" id="date_to" name="date_to" value="{{ default_date_to }}" required />
+      </div>
+      <div class="form-group">
+        <label for="subject_type">Typ podmiotu</label>
+        <select id="subject_type" name="subject_type" required>
+          <option value="subject1">Wystawione (sprzedawca)</option>
+          <option value="subject2" selected>Otrzymane (nabywca)</option>
+          <option value="subject3">Trzecia strona</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Szybki wybor</label>
+      <div class="preset-buttons">
+        <button type="button" onclick="setPreset('today')">Dzisiaj</button>
+        <button type="button" onclick="setPreset('week')">Ostatni tydzien</button>
+        <button type="button" onclick="setPreset('month')">Ostatni miesiac</button>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" id="fetch-btn">Pobierz</button>
+      <a href="/invoices" class="btn btn-secondary">Anuluj</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelector('form').addEventListener('submit', function() {
+  var btn = document.getElementById('fetch-btn');
+  btn.disabled = true;
+  btn.textContent = 'Pobieranie...';
+});
+function setPreset(preset) {
+  const today = new Date();
+  const to = today.toISOString().split('T')[0];
+  let from;
+  if (preset === 'today') {
+    from = to;
+  } else if (preset === 'week') {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 7);
+    from = d.toISOString().split('T')[0];
+  } else if (preset === 'month') {
+    const d = new Date(today);
+    d.setMonth(d.getMonth() - 1);
+    from = d.toISOString().split('T')[0];
+  }
+  document.getElementById('date_from').value = from;
+  document.getElementById('date_to').value = to;
+}
+</script>
+{% endblock %}

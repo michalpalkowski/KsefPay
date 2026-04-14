@@ -1,0 +1,117 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>{{ invoice.invoice_number }} - KSeF PayMoney</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>{{ invoice.invoice_number }}</h1>
+    <span class="status-badge status-{{ invoice.status }}">{{ invoice.status }}</span>
+  </div>
+
+  <div class="invoice-meta">
+    <div class="meta-row">
+      <span class="meta-label">Data wystawienia</span>
+      <span>{{ invoice.issue_date }}</span>
+    </div>
+    <div class="meta-row">
+      <span class="meta-label">Data sprzedazy</span>
+      <span>{% match invoice.sale_date %}{% when Some with (d) %}{{ d }}{% when None %}-{% endmatch %}</span>
+    </div>
+    <div class="meta-row">
+      <span class="meta-label">Termin platnosci</span>
+      <span>{% match invoice.payment_deadline %}{% when Some with (d) %}{{ d }}{% when None %}-{% endmatch %}</span>
+    </div>
+    <div class="meta-row">
+      <span class="meta-label">Metoda platnosci</span>
+      <span>{% match invoice.payment_method %}{% when Some with (m) %}{{ m }}{% when None %}-{% endmatch %}</span>
+    </div>
+    {% match invoice.ksef_number %}
+      {% when Some with (num) %}
+      <div class="meta-row">
+        <span class="meta-label">Numer KSeF</span>
+        <span class="ksef-number">{{ num }}</span>
+      </div>
+      {% when None %}
+    {% endmatch %}
+    {% match invoice.ksef_error %}
+      {% when Some with (err) %}
+      <div class="meta-row error-row">
+        <span class="meta-label">Blad KSeF</span>
+        <span>{{ err }}</span>
+      </div>
+      {% when None %}
+    {% endmatch %}
+  </div>
+
+  <div class="invoice-parties">
+    <div class="party-card">
+      <h3>Sprzedawca</h3>
+      <p><strong>{{ invoice.seller.name }}</strong></p>
+      <p>NIP: {% match invoice.seller.nip %}{% when Some with (n) %}{{ n }}{% when None %}-{% endmatch %}</p>
+      <p>{{ invoice.seller.address.line1 }}</p>
+      <p>{{ invoice.seller.address.line2 }}</p>
+    </div>
+    <div class="party-card">
+      <h3>Nabywca</h3>
+      <p><strong>{{ invoice.buyer.name }}</strong></p>
+      <p>NIP: {% match invoice.buyer.nip %}{% when Some with (n) %}{{ n }}{% when None %}-{% endmatch %}</p>
+      <p>{{ invoice.buyer.address.line1 }}</p>
+      <p>{{ invoice.buyer.address.line2 }}</p>
+    </div>
+  </div>
+
+  <h3>Pozycje</h3>
+  <table class="invoice-table">
+    <thead>
+      <tr>
+        <th>Lp.</th>
+        <th>Opis</th>
+        <th>Ilosc</th>
+        <th>Cena netto</th>
+        <th>VAT</th>
+        <th>Wartosc brutto</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in invoice.line_items %}
+      <tr>
+        <td>{{ item.line_number }}</td>
+        <td>{{ item.description }}</td>
+        <td>{{ item.quantity }}</td>
+        <td>{% match item.unit_net_price %}{% when Some with (p) %}{{ p }} PLN{% when None %}-{% endmatch %}</td>
+        <td>{{ item.vat_rate }}%</td>
+        <td>{{ item.gross_value }} PLN</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="invoice-totals">
+    <div class="meta-row"><span class="meta-label">Netto</span><span>{{ invoice.total_net }} PLN</span></div>
+    <div class="meta-row"><span class="meta-label">VAT</span><span>{{ invoice.total_vat }} PLN</span></div>
+    <div class="meta-row total-row"><span class="meta-label">Brutto</span><span>{{ invoice.total_gross }} PLN</span></div>
+  </div>
+
+  {% if invoice.status.to_string() == "draft" %}
+  <div class="invoice-actions">
+    <form method="post" action="/invoices/{{ invoice.id }}/submit">
+      <button type="submit" class="btn btn-primary">Wyslij do KSeF</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% match invoice.raw_xml %}
+    {% when Some with (xml) %}
+    <details class="raw-xml-section">
+      <summary>FA(3) XML</summary>
+      <pre class="raw-xml">{{ xml|escape }}</pre>
+    </details>
+    {% when None %}
+  {% endmatch %}
+</div>
+
+<a href="/invoices" class="back-link">Powrot do listy</a>
+{% endblock %}

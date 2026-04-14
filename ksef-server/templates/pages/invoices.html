@@ -1,0 +1,122 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Faktury</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>Faktury</h1>
+    <div class="header-actions">
+      <a href="/invoices/fetch" class="btn">Pobierz z KSeF</a>
+      <a href="/invoices/new" class="btn btn-primary">Nowa faktura</a>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <a href="/invoices?tab=outgoing" class="tab {% if tab == "outgoing" %}tab-active{% endif %}">
+      Wystawione ({{ outgoing.len() }})
+    </a>
+    <a href="/invoices?tab=incoming" class="tab {% if tab == "incoming" %}tab-active{% endif %}">
+      Otrzymane ({{ incoming.len() }})
+    </a>
+  </div>
+
+  {% if tab == "outgoing" %}
+    {% if outgoing.is_empty() %}
+    <div class="empty-state">
+      <p>Brak wystawionych faktur.</p>
+      <a href="/invoices/new" class="btn btn-primary">Nowa faktura</a>
+    </div>
+    {% else %}
+    <div class="table-wrap">
+    <table class="invoice-table">
+      <colgroup>
+        <col style="width: 18%" />
+        <col style="width: 10%" />
+        <col style="width: 18%" />
+        <col style="width: 12%" />
+        <col style="width: 10%" />
+        <col style="width: 32%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Numer</th>
+          <th>Data</th>
+          <th>Nabywca</th>
+          <th>Brutto</th>
+          <th>Status</th>
+          <th>Numer KSeF</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in outgoing %}
+        <tr>
+          <td><a href="/invoices/{{ inv.id }}">{{ inv.invoice_number }}</a></td>
+          <td>{{ inv.issue_date }}</td>
+          <td>{{ inv.buyer.name }}</td>
+          <td>{{ inv.total_gross }} PLN</td>
+          <td><span class="status-badge status-{{ inv.status }}">{{ inv.status }}</span></td>
+          <td class="ksef-col" {% match inv.ksef_number %}{% when Some with (num) %}title="{{ num }}"{% when None %}{% endmatch %}>
+            {% match inv.ksef_number %}
+              {% when Some with (num) %}{{ num }}
+              {% when None %}-
+            {% endmatch %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+  {% else %}
+    {% if incoming.is_empty() %}
+    <div class="empty-state">
+      <p>Brak otrzymanych faktur.</p>
+      <a href="/invoices/fetch" class="btn btn-primary">Pobierz z KSeF</a>
+    </div>
+    {% else %}
+    <div class="table-wrap">
+    <table class="invoice-table">
+      <colgroup>
+        <col style="width: 18%" />
+        <col style="width: 10%" />
+        <col style="width: 18%" />
+        <col style="width: 12%" />
+        <col style="width: 10%" />
+        <col style="width: 32%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Numer</th>
+          <th>Data</th>
+          <th>Sprzedawca</th>
+          <th>Brutto</th>
+          <th>Status</th>
+          <th>Numer KSeF</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in incoming %}
+        <tr>
+          <td><a href="/invoices/{{ inv.id }}">{{ inv.invoice_number }}</a></td>
+          <td>{{ inv.issue_date }}</td>
+          <td>{{ inv.seller.name }}</td>
+          <td>{{ inv.total_gross }} PLN</td>
+          <td><span class="status-badge status-{{ inv.status }}">{{ inv.status }}</span></td>
+          <td class="ksef-col" {% match inv.ksef_number %}{% when Some with (num) %}title="{{ num }}"{% when None %}{% endmatch %}>
+            {% match inv.ksef_number %}
+              {% when Some with (num) %}{{ num }}
+              {% when None %}-
+            {% endmatch %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

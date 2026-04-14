@@ -1,0 +1,126 @@
+use askama::Template;
+use axum::Form;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use serde::Deserialize;
+
+use ksef_core::domain::permission::PermissionType;
+use ksef_core::domain::token_mgmt::ManagedToken;
+use ksef_core::ports::ksef_tokens::{TokenGenerateRequest, TokenQueryRequest};
+
+use crate::state::AppState;
+
+#[derive(Template)]
+#[template(path = "pages/tokens.html")]
+struct TokensTemplate {
+    active: &'static str,
+    tokens: Vec<ManagedToken>,
+    error: Option<String>,
+    success: Option<String>,
+}
+
+fn render<T: Template>(tmpl: T) -> Response {
+    match tmpl.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Template error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+fn empty_page(error: Option<String>, success: Option<String>) -> Response {
+    render(TokensTemplate {
+        active: "/tokens",
+        tokens: Vec::new(),
+        error,
+        success,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct GenerateFormData {
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    pub description: Option<String>,
+}
+
+pub async fn tokens_page(State(state): State<AppState>) -> Response {
+    let token = match state.session_service.ensure_token(&state.nip).await {
+        Ok(tp) => tp.access_token,
+        Err(e) => return empty_page(Some(format!("Brak tokenu dostepu: {e}")), None),
+    };
+
+    let request = TokenQueryRequest {
+        status: None,
+        limit: Some(50),
+        offset: None,
+    };
+
+    match state.token_mgmt_service.query(&token, &request).await {
+        Ok(response) => render(TokensTemplate {
+            active: "/tokens",
+            tokens: response.items,
+            error: None,
+            success: None,
+        }),
+        Err(e) => empty_page(
+            Some(format!("Pobieranie tokenow nie powiodlo sie: {e}")),
+            None,
+        ),
+    }
+}
+
+pub async fn generate(
+    State(state): State<AppState>,
+    Form(form): Form<GenerateFormData>,
+) -> Response {
+    if form.permissions.is_empty() {
+        return empty_page(
+            Some("Wymagane co najmniej jedno uprawnienie".to_string()),
+            None,
+        );
+    }
+    let permissions: Result<Vec<PermissionType>, _> =
+        form.permissions.iter().map(|s| s.parse()).collect();
+    let permissions = match permissions {
+        Ok(p) => p,
+        Err(e) => return empty_page(Some(format!("Uprawnienia: {e}")), None),
+    };
+
+    let token = match state.session_service.ensure_token(&state.nip).await {
+        Ok(tp) => tp.access_token,
+        Err(e) => return empty_page(Some(format!("Brak tokenu dostepu: {e}")), None),
+    };
+
+    let request = TokenGenerateRequest {
+        permissions,
+        description: form.description.filter(|s| !s.trim().is_empty()),
+        valid_to: None,
+    };
+
+    match state.token_mgmt_service.generate(&token, &request).await {
+        Ok(generated) => empty_page(None, Some(format!("Token wygenerowany: {}", generated.id))),
+        Err(e) => empty_page(
+            Some(format!("Generowanie tokenu nie powiodlo sie: {e}")),
+            None,
+        ),
+    }
+}
+
+pub async fn revoke(State(state): State<AppState>, Path(token_id): Path<String>) -> Response {
+    let access = match state.session_service.ensure_token(&state.nip).await {
+        Ok(tp) => tp.access_token,
+        Err(e) => return empty_page(Some(format!("Brak tokenu dostepu: {e}")), None),
+    };
+
+    match state.token_mgmt_service.revoke(&access, &token_id).await {
+        Ok(()) => Redirect::to("/tokens").into_response(),
+        Err(e) => empty_page(
+            Some(format!("Unieaznienie tokenu nie powiodlo sie: {e}")),
+            None,
+        ),
+    }
+}

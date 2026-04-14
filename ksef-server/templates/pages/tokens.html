@@ -1,0 +1,92 @@
+{% extends "layouts/app.html" %}
+{% import "macros/alerts.html" as alerts %}
+
+{% block head %}
+<title>Tokeny - KSeF PayMoney</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <div>
+      <h1>Tokeny KSeF</h1>
+      <p class="page-copy">Generowanie i zarzadzanie tokenami dostepu</p>
+    </div>
+  </div>
+  {% call alerts::alerts(error, success) %}{% endcall %}
+</div>
+
+<div class="page-card">
+  <h2>Wygeneruj nowy token</h2>
+  <form method="post" action="/tokens/generate" class="form-stack">
+    <div class="form-group">
+      <label>Uprawnienia</label>
+      <div class="checkbox-group">
+        <label class="checkbox-label">
+          <input type="checkbox" name="permissions" value="InvoiceRead" checked />
+          Odczyt faktur
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="permissions" value="InvoiceWrite" />
+          Wystawianie faktur
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="permissions" value="CredentialsRead" />
+          Odczyt uprawnien
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="permissions" value="CredentialsManage" />
+          Zarzadzanie uprawnieniami
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="permissions" value="SubunitManage" />
+          Zarzadzanie podjednostkami
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="permissions" value="EnforcementOperations" />
+          Operacje egzekucyjne
+        </label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="gen_description">Opis (opcjonalny)</label>
+      <input type="text" id="gen_description" name="description" placeholder="Token dla systemu X" />
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Wygeneruj</button>
+    </div>
+  </form>
+</div>
+
+{% if !tokens.is_empty() %}
+<div class="page-card">
+  <h2>Tokeny ({{ tokens.len() }})</h2>
+  <table class="invoice-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Status</th>
+        <th>Utworzony</th>
+        <th>Wygasa</th>
+        <th>Akcje</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tokens %}
+      <tr>
+        <td><code>{{ t.id }}</code></td>
+        <td><span class="status-badge status-{% if t.status.to_string() == "Active" %}accepted{% else %}failed{% endif %}">{{ t.status }}</span></td>
+        <td>{{ t.created_at.format("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ t.expires_at.format("%Y-%m-%d %H:%M") }}</td>
+        <td>
+          <form method="post" action="/tokens/{{ t.id }}/revoke" style="display:inline" onsubmit="return confirm('Uniewazniony token nie moze byc przywrocony. Kontynuowac?')">
+            <button type="submit" class="btn btn-danger btn-sm">Uniewaznij</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
