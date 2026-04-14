@@ -21,6 +21,13 @@ pub struct BatchFilePartInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchArchive {
+    pub zip_bytes: Vec<u8>,
+    pub file_info: BatchFileInfo,
+    pub parts: Vec<BatchFilePartInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartUploadRequest {
     pub session_reference: String,
     pub upload_url: String,

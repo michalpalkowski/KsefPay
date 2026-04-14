@@ -4,15 +4,9 @@ use base64::Engine;
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 
-use crate::domain::batch::{BatchFileInfo, BatchFilePartInfo};
+use crate::domain::batch::{BatchArchive, BatchFileInfo, BatchFilePartInfo};
 use crate::error::KSeFError;
-
-#[derive(Debug, Clone)]
-pub struct BatchArchive {
-    pub zip_bytes: Vec<u8>,
-    pub file_info: BatchFileInfo,
-    pub parts: Vec<BatchFilePartInfo>,
-}
+use crate::ports::batch_archive_builder::BatchArchiveBuilder;
 
 pub struct BatchFileBuilder {
     max_part_size_bytes: usize,
@@ -89,6 +83,12 @@ impl BatchFileBuilder {
             file_info,
             parts,
         })
+    }
+}
+
+impl BatchArchiveBuilder for BatchFileBuilder {
+    fn build_archive(&self, files: &[(String, Vec<u8>)]) -> Result<BatchArchive, KSeFError> {
+        self.build(files)
     }
 }
 

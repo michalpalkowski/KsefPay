@@ -81,6 +81,8 @@ impl OfflineService {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::domain::environment::KSeFEnvironment;
     use crate::domain::invoice::{
@@ -88,6 +90,11 @@ mod tests {
         LineItem, Money, Party, Quantity, VatRate,
     };
     use crate::domain::nip::Nip;
+    use crate::infra::qr::generator::QRCodeGenerator;
+
+    fn qr_service() -> QRService {
+        QRService::new(KSeFEnvironment::Test, Arc::new(QRCodeGenerator))
+    }
 
     fn invoice_with_xml() -> Invoice {
         let nip = Nip::parse("5260250274").unwrap();
@@ -147,10 +154,7 @@ mod tests {
 
     #[test]
     fn generate_package_requires_certificate_serial_for_kod_ii() {
-        let service = OfflineService::new(
-            QRService::new(KSeFEnvironment::Test),
-            OfflineConfig::default(),
-        );
+        let service = OfflineService::new(qr_service(), OfflineConfig::default());
         let invoice = invoice_with_xml();
         let err = service
             .generate_offline_package(&invoice, OfflineMode::Offline, " ", Utc::now())
@@ -163,10 +167,7 @@ mod tests {
 
     #[test]
     fn offline24_deadline_is_24h() {
-        let service = OfflineService::new(
-            QRService::new(KSeFEnvironment::Test),
-            OfflineConfig::default(),
-        );
+        let service = OfflineService::new(qr_service(), OfflineConfig::default());
         let invoice = invoice_with_xml();
         let now = Utc::now();
         let pkg = service
@@ -177,10 +178,7 @@ mod tests {
 
     #[test]
     fn mark_expired_switches_status_when_deadline_passed() {
-        let service = OfflineService::new(
-            QRService::new(KSeFEnvironment::Test),
-            OfflineConfig::default(),
-        );
+        let service = OfflineService::new(qr_service(), OfflineConfig::default());
         let invoice = invoice_with_xml();
         let now = Utc::now();
         let mut pkg = service

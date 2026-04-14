@@ -5,11 +5,12 @@ use crate::domain::auth::AccessToken;
 use crate::domain::export::{ExportJob, ExportStatus};
 use crate::domain::session::InvoiceQuery;
 use crate::error::{CryptoError, KSeFError};
-use crate::infra::crypto::aes_256_cbc_decrypt;
+use crate::ports::invoice_decryptor::InvoiceDecryptor;
 use crate::ports::ksef_export::{ExportRequest, KSeFExport};
 
 pub struct ExportService {
     port: Arc<dyn KSeFExport>,
+    decryptor: Arc<dyn InvoiceDecryptor>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -32,8 +33,8 @@ pub enum ExportServiceError {
 
 impl ExportService {
     #[must_use]
-    pub fn new(port: Arc<dyn KSeFExport>) -> Self {
-        Self { port }
+    pub fn new(port: Arc<dyn KSeFExport>, decryptor: Arc<dyn InvoiceDecryptor>) -> Self {
+        Self { port, decryptor }
     }
 
     pub async fn start(
@@ -113,7 +114,9 @@ impl ExportService {
             ExportServiceError::DownloadFailed(format!("reading response body failed: {e}"))
         })?;
 
-        let decrypted = aes_256_cbc_decrypt(&encrypted_bytes, encryption_key, encryption_iv)?;
+        let decrypted = self
+            .decryptor
+            .decrypt(&encrypted_bytes, encryption_key, encryption_iv)?;
         Ok(decrypted)
     }
 }

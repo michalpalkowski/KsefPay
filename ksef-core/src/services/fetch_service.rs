@@ -5,8 +5,8 @@ use crate::domain::nip::Nip;
 use crate::domain::session::{InvoiceQuery, KSeFNumber};
 use crate::domain::xml::InvoiceXml;
 use crate::error::{KSeFError, RepositoryError, XmlError};
-use crate::infra::fa3::xml_to_invoice;
 use crate::ports::invoice_repository::InvoiceRepository;
+use crate::ports::invoice_xml::InvoiceXmlConverter;
 use crate::ports::ksef_client::KSeFClient;
 use crate::services::session_service::{SessionService, SessionServiceError};
 
@@ -15,6 +15,7 @@ pub struct FetchService {
     session_service: Arc<SessionService>,
     ksef_client: Arc<dyn KSeFClient>,
     repo: Arc<dyn InvoiceRepository>,
+    xml_converter: Arc<dyn InvoiceXmlConverter>,
     nip: Nip,
 }
 
@@ -64,12 +65,14 @@ impl FetchService {
         session_service: Arc<SessionService>,
         ksef_client: Arc<dyn KSeFClient>,
         repo: Arc<dyn InvoiceRepository>,
+        xml_converter: Arc<dyn InvoiceXmlConverter>,
         nip: Nip,
     ) -> Self {
         Self {
             session_service,
             ksef_client,
             repo,
+            xml_converter,
             nip,
         }
     }
@@ -140,7 +143,10 @@ impl FetchService {
             )))
         })?;
 
-        let invoice = xml_to_invoice(&xml, direction, ksef_number).map_err(ProcessError::Parse)?;
+        let invoice = self
+            .xml_converter
+            .from_xml(&xml, direction, ksef_number)
+            .map_err(ProcessError::Parse)?;
 
         let existing = self
             .repo
@@ -165,7 +171,7 @@ mod tests {
     use crate::domain::environment::KSeFEnvironment;
     use crate::domain::invoice::InvoiceStatus;
     use crate::domain::session::SubjectType;
-    use crate::infra::fa3::invoice_to_xml;
+    use crate::infra::fa3::{Fa3XmlConverter, invoice_to_xml};
     use crate::test_support::fixtures::sample_invoice;
     use crate::test_support::mock_invoice_repo::MockInvoiceRepo;
     use crate::test_support::mock_ksef::{MockKSeFAuth, MockKSeFClient, MockXadesSigner};
@@ -188,9 +194,16 @@ mod tests {
             KSeFEnvironment::Test,
         ));
         let repo = Arc::new(MockInvoiceRepo::new());
+        let xml_converter = Arc::new(Fa3XmlConverter);
         let nip = test_nip();
 
-        let service = FetchService::new(session_service, client.clone(), repo.clone(), nip);
+        let service = FetchService::new(
+            session_service,
+            client.clone(),
+            repo.clone(),
+            xml_converter,
+            nip,
+        );
         (service, client, repo)
     }
 

@@ -6,6 +6,7 @@ use qrcode::render::svg;
 
 use crate::domain::qr::{QRCodeData, QRCodeOptions};
 use crate::error::KSeFError;
+use crate::ports::qr_renderer::QrRenderer;
 
 pub struct QRCodeGenerator;
 
@@ -47,6 +48,16 @@ impl QRCodeGenerator {
             .quiet_zone(options.margin > 0)
             .build();
         Ok(svg)
+    }
+}
+
+impl QrRenderer for QRCodeGenerator {
+    fn render_png(&self, data: &QRCodeData, options: QRCodeOptions) -> Result<Vec<u8>, KSeFError> {
+        Self::generate_png(data, options)
+    }
+
+    fn render_svg(&self, data: &QRCodeData, options: QRCodeOptions) -> Result<String, KSeFError> {
+        Self::generate_svg(data, options)
     }
 }
 

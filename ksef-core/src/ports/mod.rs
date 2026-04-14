@@ -1,5 +1,8 @@
+pub mod batch_archive_builder;
 pub mod encryption;
+pub mod invoice_decryptor;
 pub mod invoice_repository;
+pub mod invoice_xml;
 pub mod job_queue;
 pub mod ksef_auth;
 pub mod ksef_auth_sessions;
@@ -11,5 +14,6 @@ pub mod ksef_peppol;
 pub mod ksef_permissions;
 pub mod ksef_rate_limits;
 pub mod ksef_tokens;
+pub mod qr_renderer;
 pub mod session_repository;
 pub mod transaction;

@@ -780,6 +780,7 @@ async fn batch_open_upload_parts_and_close() {
             &token_pair.access_token,
             &BatchOpenRequest {
                 file: batch_archive.file_info.clone(),
+                parts: batch_archive.parts.clone(),
             },
         )
         .await

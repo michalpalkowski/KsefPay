@@ -12,6 +12,7 @@ use crate::domain::crypto::{EncryptedInvoice, KSeFPublicKey};
 use crate::domain::xml::InvoiceXml;
 use crate::error::CryptoError;
 use crate::ports::encryption::InvoiceEncryptor;
+use crate::ports::invoice_decryptor::InvoiceDecryptor;
 
 /// AES-256-CBC + RSA-OAEP encryptor for `KSeF` invoice submission.
 pub struct AesCbcEncryptor;
@@ -24,6 +25,12 @@ impl InvoiceEncryptor for AesCbcEncryptor {
         public_key: &KSeFPublicKey,
     ) -> Result<EncryptedInvoice, CryptoError> {
         encrypt_invoice(xml.as_bytes(), public_key.pem())
+    }
+}
+
+impl InvoiceDecryptor for AesCbcEncryptor {
+    fn decrypt(&self, ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        aes_256_cbc_decrypt(ciphertext, key, iv)
     }
 }
 

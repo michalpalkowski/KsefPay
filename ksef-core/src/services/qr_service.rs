@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
 use crate::domain::environment::KSeFEnvironment;
 use crate::domain::invoice::Invoice;
 use crate::domain::qr::{KodI, KodII, QRCodeData, QRCodeOptions};
-use crate::infra::qr::generator::QRCodeGenerator;
+use crate::ports::qr_renderer::QrRenderer;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QrServiceError {
@@ -23,12 +25,16 @@ pub enum QrServiceError {
 
 pub struct QRService {
     environment: KSeFEnvironment,
+    renderer: Arc<dyn QrRenderer>,
 }
 
 impl QRService {
     #[must_use]
-    pub fn new(environment: KSeFEnvironment) -> Self {
-        Self { environment }
+    pub fn new(environment: KSeFEnvironment, renderer: Arc<dyn QrRenderer>) -> Self {
+        Self {
+            environment,
+            renderer,
+        }
     }
 
     #[must_use]
@@ -90,7 +96,8 @@ impl QRService {
         options: QRCodeOptions,
     ) -> Result<Vec<u8>, QrServiceError> {
         let kod = self.build_kod_i(invoice)?;
-        QRCodeGenerator::generate_png(&kod.0, options)
+        self.renderer
+            .render_png(&kod.0, options)
             .map_err(|e| QrServiceError::Generation(e.to_string()))
     }
 
@@ -100,7 +107,8 @@ impl QRService {
         options: QRCodeOptions,
     ) -> Result<String, QrServiceError> {
         let kod = self.build_kod_i(invoice)?;
-        QRCodeGenerator::generate_svg(&kod.0, options)
+        self.renderer
+            .render_svg(&kod.0, options)
             .map_err(|e| QrServiceError::Generation(e.to_string()))
     }
 }
@@ -126,6 +134,11 @@ mod tests {
         LineItem, Money, Party, Quantity, VatRate,
     };
     use crate::domain::nip::Nip;
+    use crate::infra::qr::generator::QRCodeGenerator;
+
+    fn service() -> QRService {
+        QRService::new(KSeFEnvironment::Test, Arc::new(QRCodeGenerator))
+    }
 
     fn invoice_with_xml() -> Invoice {
         let nip = Nip::parse("5260250274").unwrap();
@@ -185,7 +198,7 @@ mod tests {
 
     #[test]
     fn kod_i_url_matches_required_pattern() {
-        let service = QRService::new(KSeFEnvironment::Test);
+        let service = service();
         let invoice = invoice_with_xml();
         let kod_i = service.build_kod_i(&invoice).unwrap();
         let url = &(kod_i.0).url;
@@ -194,7 +207,7 @@ mod tests {
 
     #[test]
     fn missing_raw_xml_fails_fast() {
-        let service = QRService::new(KSeFEnvironment::Test);
+        let service = service();
         let mut invoice = invoice_with_xml();
         invoice.raw_xml = None;
         let err = service.build_kod_i(&invoice).unwrap_err();
@@ -203,7 +216,7 @@ mod tests {
 
     #[test]
     fn render_png_and_svg_are_valid() {
-        let service = QRService::new(KSeFEnvironment::Test);
+        let service = service();
         let invoice = invoice_with_xml();
 
         let png = service

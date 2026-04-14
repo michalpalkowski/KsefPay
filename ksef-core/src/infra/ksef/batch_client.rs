@@ -207,9 +207,26 @@ impl KSeFBatch for HttpKSeFBatch {
         access_token: &AccessToken,
         request: &BatchOpenRequest,
     ) -> Result<BatchSession, KSeFError> {
+        if request.parts.is_empty() {
+            return Err(KSeFError::InvoiceSubmissionFailed(
+                "batch open request must include at least one file part".to_string(),
+            ));
+        }
+
         let url = format!("{}/sessions/batch", self.http.base_url);
         let (encrypted_symmetric_key, initialization_vector) =
             self.prepare_batch_encryption(access_token).await?;
+        let file_parts = request
+            .parts
+            .iter()
+            .map(|part| {
+                serde_json::json!({
+                    "ordinalNumber": part.part_number,
+                    "fileSize": part.size_bytes,
+                    "fileHash": part.hash_sha256_base64,
+                })
+            })
+            .collect::<Vec<_>>();
         let body = serde_json::json!({
             "formCode": {
                 "systemCode": "FA (3)",
@@ -219,11 +236,7 @@ impl KSeFBatch for HttpKSeFBatch {
             "batchFile": {
                 "fileSize": request.file.file_size_bytes,
                 "fileHash": request.file.file_hash_sha256_base64,
-                "fileParts": [{
-                    "ordinalNumber": 1,
-                    "fileSize": request.file.file_size_bytes,
-                    "fileHash": request.file.file_hash_sha256_base64,
-                }],
+                "fileParts": file_parts,
             },
             "encryption": {
                 "encryptedSymmetricKey": encrypted_symmetric_key,

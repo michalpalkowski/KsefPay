@@ -9,10 +9,12 @@ use tracing_subscriber::EnvFilter;
 
 use ksef_core::infra::batch::zip_builder::BatchFileBuilder;
 use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslXadesSigner};
+use ksef_core::infra::fa3::Fa3XmlConverter;
 use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
 use ksef_core::infra::ksef::KSeFApiClient;
 use ksef_core::infra::pg::Db;
+use ksef_core::infra::qr::generator::QRCodeGenerator;
 use ksef_core::services::batch_service::BatchService;
 use ksef_core::services::export_service::ExportService;
 use ksef_core::services::fetch_service::FetchService;
@@ -132,23 +134,30 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
     ));
     let encryptor = Arc::new(AesCbcEncryptor);
+    let decryptor = Arc::new(AesCbcEncryptor);
+    let xml_converter = Arc::new(Fa3XmlConverter);
+    let qr_renderer = Arc::new(QRCodeGenerator);
 
     let fetch_service = Arc::new(FetchService::new(
         session_service.clone(),
         ksef.clone(),
         db.clone(),
+        xml_converter.clone(),
         config.ksef_nip.clone(),
     ));
 
     let permission_service = Arc::new(PermissionService::new(ksef.clone()));
     let token_mgmt_service = Arc::new(TokenMgmtService::new(ksef.clone()));
-    let export_service = Arc::new(ExportService::new(ksef.clone()));
-    let batch_service = Arc::new(BatchService::new(ksef.clone(), BatchFileBuilder::default()));
+    let export_service = Arc::new(ExportService::new(ksef.clone(), decryptor));
+    let batch_service = Arc::new(BatchService::new(
+        ksef.clone(),
+        Arc::new(BatchFileBuilder::default()),
+    ));
 
-    let qr_service = Arc::new(QRService::new(config.ksef_environment));
+    let qr_service = Arc::new(QRService::new(config.ksef_environment, qr_renderer.clone()));
 
     let offline_service = Arc::new(OfflineService::new(
-        QRService::new(config.ksef_environment),
+        QRService::new(config.ksef_environment, qr_renderer),
         OfflineConfig::default(),
     ));
 
@@ -160,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         session_service.clone(),
         ksef.clone(),
         encryptor,
+        xml_converter,
         Duration::from_secs(2),
     ));
 

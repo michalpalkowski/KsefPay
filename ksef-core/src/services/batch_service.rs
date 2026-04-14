@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use crate::domain::auth::AccessToken;
-use crate::domain::batch::{BatchFileInfo, BatchSession, PartUploadRequest};
+use crate::domain::batch::{BatchArchive, BatchFileInfo, BatchSession, PartUploadRequest};
 use crate::error::KSeFError;
-use crate::infra::batch::zip_builder::{BatchArchive, BatchFileBuilder};
+use crate::ports::batch_archive_builder::BatchArchiveBuilder;
 use crate::ports::ksef_batch::{BatchOpenRequest, KSeFBatch};
 
 pub struct BatchService {
     port: Arc<dyn KSeFBatch>,
-    builder: BatchFileBuilder,
+    builder: Arc<dyn BatchArchiveBuilder>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -19,7 +19,7 @@ pub enum BatchServiceError {
 
 impl BatchService {
     #[must_use]
-    pub fn new(port: Arc<dyn KSeFBatch>, builder: BatchFileBuilder) -> Self {
+    pub fn new(port: Arc<dyn KSeFBatch>, builder: Arc<dyn BatchArchiveBuilder>) -> Self {
         Self { port, builder }
     }
 
@@ -27,7 +27,7 @@ impl BatchService {
         &self,
         files: &[(String, Vec<u8>)],
     ) -> Result<BatchArchive, BatchServiceError> {
-        Ok(self.builder.build(files)?)
+        Ok(self.builder.build_archive(files)?)
     }
 
     pub async fn upload_archive(
@@ -45,6 +45,7 @@ impl BatchService {
                         file_size_bytes: archive.file_info.file_size_bytes,
                         file_hash_sha256_base64: archive.file_info.file_hash_sha256_base64.clone(),
                     },
+                    parts: archive.parts.clone(),
                 },
             )
             .await?;
@@ -104,6 +105,7 @@ mod tests {
 
     use super::*;
     use crate::domain::batch::{BatchSessionStatus, PartUploadRequest};
+    use crate::infra::batch::zip_builder::BatchFileBuilder;
     use crate::ports::ksef_batch::{BatchOpenRequest, KSeFBatch};
 
     #[derive(Default)]
@@ -179,7 +181,7 @@ mod tests {
     async fn build_and_upload_happy_path() {
         let service = BatchService::new(
             Arc::new(MockBatchPort::default()),
-            BatchFileBuilder::new(1024),
+            Arc::new(BatchFileBuilder::new(1024)),
         );
         let files = vec![
             ("a.xml".to_string(), b"<a/>".to_vec()),
@@ -198,7 +200,7 @@ mod tests {
     async fn empty_input_fails_fast() {
         let service = BatchService::new(
             Arc::new(MockBatchPort::default()),
-            BatchFileBuilder::default(),
+            Arc::new(BatchFileBuilder::default()),
         );
         let files = Vec::new();
         let err = service

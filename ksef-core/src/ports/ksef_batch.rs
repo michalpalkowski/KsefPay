@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 
 use crate::domain::auth::AccessToken;
-use crate::domain::batch::{BatchFileInfo, BatchSession, PartUploadRequest};
+use crate::domain::batch::{BatchFileInfo, BatchFilePartInfo, BatchSession, PartUploadRequest};
 use crate::error::KSeFError;
 
 #[derive(Debug, Clone)]
 pub struct BatchOpenRequest {
     pub file: BatchFileInfo,
+    pub parts: Vec<BatchFilePartInfo>,
 }
 
 /// Port: `KSeF` batch session workflow.

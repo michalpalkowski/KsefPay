@@ -6,8 +6,8 @@ use tracing::{info, warn};
 
 use crate::domain::invoice::{InvoiceId, InvoiceStatus};
 use crate::domain::job::Job;
-use crate::infra::fa3::invoice_to_xml;
 use crate::ports::encryption::InvoiceEncryptor;
+use crate::ports::invoice_xml::InvoiceXmlConverter;
 use crate::ports::job_queue::JobQueue;
 use crate::ports::ksef_client::KSeFClient;
 use crate::services::invoice_service::InvoiceService;
@@ -20,6 +20,7 @@ pub struct JobWorker {
     session_service: Arc<SessionService>,
     ksef_client: Arc<dyn KSeFClient>,
     encryptor: Arc<dyn InvoiceEncryptor>,
+    xml_converter: Arc<dyn InvoiceXmlConverter>,
     poll_interval: Duration,
 }
 
@@ -31,6 +32,7 @@ impl JobWorker {
         session_service: Arc<SessionService>,
         ksef_client: Arc<dyn KSeFClient>,
         encryptor: Arc<dyn InvoiceEncryptor>,
+        xml_converter: Arc<dyn InvoiceXmlConverter>,
         poll_interval: Duration,
     ) -> Self {
         Self {
@@ -39,6 +41,7 @@ impl JobWorker {
             session_service,
             ksef_client,
             encryptor,
+            xml_converter,
             poll_interval,
         }
     }
@@ -169,8 +172,10 @@ impl JobWorker {
             }
         }
 
-        let xml =
-            invoice_to_xml(&invoice).map_err(|e| format!("failed to build FA(3) XML: {e}"))?;
+        let xml = self
+            .xml_converter
+            .to_xml(&invoice)
+            .map_err(|e| format!("failed to build FA(3) XML: {e}"))?;
         let public_keys = self
             .ksef_client
             .fetch_public_keys()
@@ -239,6 +244,7 @@ mod tests {
     use super::*;
     use crate::domain::environment::KSeFEnvironment;
     use crate::domain::job::JobStatus;
+    use crate::infra::fa3::Fa3XmlConverter;
     use crate::services::invoice_service::{CreateInvoiceInput, InvoiceService};
     use crate::services::session_service::SessionService;
     use crate::test_support::fixtures::sample_invoice;
@@ -287,12 +293,14 @@ mod tests {
             KSeFEnvironment::Test,
         ));
         let encryptor = Arc::new(MockEncryptor);
+        let xml_converter = Arc::new(Fa3XmlConverter);
         let worker = JobWorker::new(
             queue.clone(),
             invoice_service.clone(),
             session_service,
             client,
             encryptor,
+            xml_converter,
             Duration::from_millis(10),
         );
         (worker, queue, invoice_service)
