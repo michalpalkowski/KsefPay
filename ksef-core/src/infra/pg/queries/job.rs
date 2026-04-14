@@ -1,0 +1,187 @@
+use sqlx::PgExecutor;
+
+use crate::domain::job::{Job, JobId, JobStatus};
+use crate::error::QueueError;
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct JobRow {
+    pub id: uuid::Uuid,
+    pub job_type: String,
+    pub payload: serde_json::Value,
+    pub status: String,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub last_error: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl JobRow {
+    pub(crate) fn try_into_domain(self) -> Result<Job, QueueError> {
+        let status = match self.status.as_str() {
+            "pending" => JobStatus::Pending,
+            "running" => JobStatus::Running,
+            "completed" => JobStatus::Completed,
+            "dead_letter" => JobStatus::DeadLetter,
+            "failed" => JobStatus::Failed,
+            other => {
+                return Err(QueueError::DequeueFailed(format!(
+                    "unknown job status '{other}' for job {}",
+                    self.id
+                )));
+            }
+        };
+        let attempts = u32::try_from(self.attempts).map_err(|_| {
+            QueueError::DequeueFailed(format!(
+                "job {} has invalid attempts value {}",
+                self.id, self.attempts
+            ))
+        })?;
+        let max_attempts = u32::try_from(self.max_attempts).map_err(|_| {
+            QueueError::DequeueFailed(format!(
+                "job {} has invalid max_attempts value {}",
+                self.id, self.max_attempts
+            ))
+        })?;
+        Ok(Job {
+            id: JobId::from_uuid(self.id),
+            job_type: self.job_type,
+            payload: self.payload,
+            status,
+            attempts,
+            max_attempts,
+            last_error: self.last_error,
+            created_at: self.created_at,
+        })
+    }
+}
+
+pub async fn enqueue<'e>(exec: impl PgExecutor<'e>, job: &Job) -> Result<JobId, QueueError> {
+    let attempts = i32::try_from(job.attempts).map_err(|_| {
+        QueueError::EnqueueFailed(format!(
+            "job {} attempts value {} exceeds i32 range",
+            job.id, job.attempts
+        ))
+    })?;
+    let max_attempts = i32::try_from(job.max_attempts).map_err(|_| {
+        QueueError::EnqueueFailed(format!(
+            "job {} max_attempts value {} exceeds i32 range",
+            job.id, job.max_attempts
+        ))
+    })?;
+    sqlx::query(
+        r"INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, last_error, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(job.id.as_uuid())
+    .bind(&job.job_type)
+    .bind(&job.payload)
+    .bind(job.status.to_string())
+    .bind(attempts)
+    .bind(max_attempts)
+    .bind(&job.last_error)
+    .bind(job.created_at)
+    .execute(exec)
+    .await?;
+
+    Ok(job.id.clone())
+}
+
+pub async fn dequeue<'e>(exec: impl PgExecutor<'e>) -> Result<Option<Job>, QueueError> {
+    let row: Option<JobRow> = sqlx::query_as(
+        r"UPDATE jobs SET status = 'running', started_at = NOW()
+           WHERE id = (
+               SELECT id FROM jobs
+               WHERE status = 'pending' AND scheduled_at <= NOW()
+               ORDER BY scheduled_at ASC
+               LIMIT 1
+               FOR UPDATE SKIP LOCKED
+           )
+           RETURNING id, job_type, payload, status, attempts, max_attempts, last_error, created_at",
+    )
+    .fetch_optional(exec)
+    .await?;
+
+    row.map(JobRow::try_into_domain).transpose()
+}
+
+pub async fn complete<'e>(exec: impl PgExecutor<'e>, id: &JobId) -> Result<(), QueueError> {
+    let result =
+        sqlx::query("UPDATE jobs SET status = 'completed', completed_at = NOW() WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(exec)
+            .await?;
+    if result.rows_affected() == 0 {
+        return Err(QueueError::JobNotFound(id.to_string()));
+    }
+    Ok(())
+}
+
+pub async fn fail<'e>(
+    exec: impl PgExecutor<'e>,
+    id: &JobId,
+    error: &str,
+) -> Result<(), QueueError> {
+    let result = sqlx::query(
+        r"UPDATE jobs SET
+            attempts = attempts + 1,
+            last_error = $2,
+            status = CASE
+                WHEN attempts + 1 >= max_attempts THEN 'dead_letter'
+                ELSE 'pending'
+            END,
+            scheduled_at = CASE
+                WHEN attempts + 1 >= max_attempts THEN scheduled_at
+                ELSE NOW() + (POWER(2, attempts) || ' seconds')::INTERVAL
+            END,
+            started_at = CASE
+                WHEN attempts + 1 >= max_attempts THEN started_at
+                ELSE NULL
+            END
+           WHERE id = $1",
+    )
+    .bind(id.as_uuid())
+    .bind(error)
+    .execute(exec)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(QueueError::JobNotFound(id.to_string()));
+    }
+    Ok(())
+}
+
+pub async fn dead_letter<'e>(
+    exec: impl PgExecutor<'e>,
+    id: &JobId,
+    error: &str,
+) -> Result<(), QueueError> {
+    let result =
+        sqlx::query("UPDATE jobs SET status = 'dead_letter', last_error = $2 WHERE id = $1")
+            .bind(id.as_uuid())
+            .bind(error)
+            .execute(exec)
+            .await?;
+    if result.rows_affected() == 0 {
+        return Err(QueueError::JobNotFound(id.to_string()));
+    }
+    Ok(())
+}
+
+pub async fn list_pending<'e>(exec: impl PgExecutor<'e>) -> Result<Vec<Job>, QueueError> {
+    let rows: Vec<JobRow> = sqlx::query_as(
+        "SELECT id, job_type, payload, status, attempts, max_attempts, last_error, created_at
+         FROM jobs WHERE status = 'pending' ORDER BY scheduled_at ASC",
+    )
+    .fetch_all(exec)
+    .await?;
+    rows.into_iter().map(JobRow::try_into_domain).collect()
+}
+
+pub async fn list_dead_letter<'e>(exec: impl PgExecutor<'e>) -> Result<Vec<Job>, QueueError> {
+    let rows: Vec<JobRow> = sqlx::query_as(
+        "SELECT id, job_type, payload, status, attempts, max_attempts, last_error, created_at
+         FROM jobs WHERE status = 'dead_letter' ORDER BY created_at DESC",
+    )
+    .fetch_all(exec)
+    .await?;
+    rows.into_iter().map(JobRow::try_into_domain).collect()
+}

@@ -1,0 +1,42 @@
+[package]
+name = "ksef-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "KSeF e-invoice integration library — domain, ports, services, and infrastructure"
+
+[dependencies]
+tokio.workspace = true
+sqlx.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+quick-xml.workspace = true
+aes.workspace = true
+cbc.workspace = true
+rsa.workspace = true
+openssl.workspace = true
+rand.workspace = true
+sha2.workspace = true
+base64.workspace = true
+zip.workspace = true
+qrcode.workspace = true
+image.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+async-trait = "0.1"
+roxmltree = "0.20"
+bergshamra-c14n = "0.4"
+bergshamra-xml = "0.4"
+uppsala = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+
+[lints]
+workspace = true
