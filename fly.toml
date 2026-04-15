@@ -12,6 +12,7 @@ primary_region = 'fra'
   KSEF_ENVIRONMENT = "test"
   RUST_LOG = "info,ksef_core=debug,ksef_server=debug"
   SERVER_PORT = "3000"
+  ASSETS_DIR = "/app/assets"
 
 [mounts]
   source = "ksef_data"

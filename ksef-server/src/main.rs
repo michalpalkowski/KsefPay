@@ -178,7 +178,11 @@ async fn main() -> anyhow::Result<()> {
     let base_router = routes::router()
         .nest_service(
             "/assets",
-            ServeDir::new(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")),
+            ServeDir::new(
+                std::env::var("ASSETS_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")),
+            ),
         )
         .with_state(app_state);
 
