@@ -16,7 +16,6 @@ pub struct FetchService {
     ksef_client: Arc<dyn KSeFClient>,
     repo: Arc<dyn InvoiceRepository>,
     xml_converter: Arc<dyn InvoiceXmlConverter>,
-    nip: Nip,
 }
 
 /// Result of a fetch operation — every invoice either succeeds or has an explicit error.
@@ -66,29 +65,28 @@ impl FetchService {
         ksef_client: Arc<dyn KSeFClient>,
         repo: Arc<dyn InvoiceRepository>,
         xml_converter: Arc<dyn InvoiceXmlConverter>,
-        nip: Nip,
     ) -> Self {
         Self {
             session_service,
             ksef_client,
             repo,
             xml_converter,
-            nip,
         }
     }
 
-    /// Fetch invoices from `KSeF` for the given query.
+    /// Fetch invoices from `KSeF` for the given query and NIP.
     ///
-    /// 1. Authenticate (ensure valid access token)
+    /// 1. Authenticate (ensure valid access token for this NIP)
     /// 2. Query invoice metadata from `KSeF`
     /// 3. For each invoice: download XML, parse, upsert to DB
     ///
     /// One failed invoice doesn't abort the batch — errors are collected in `FetchResult.errors`.
     pub async fn fetch_invoices(
         &self,
+        nip: &Nip,
         query: &InvoiceQuery,
     ) -> Result<FetchResult, FetchServiceError> {
-        let token_pair = self.session_service.ensure_token(&self.nip).await?;
+        let token_pair = self.session_service.ensure_token(nip).await?;
         let metadata_list = self
             .ksef_client
             .query_invoices(&token_pair.access_token, query)
@@ -195,14 +193,12 @@ mod tests {
         ));
         let repo = Arc::new(MockInvoiceRepo::new());
         let xml_converter = Arc::new(Fa3XmlConverter);
-        let nip = test_nip();
 
         let service = FetchService::new(
             session_service,
             client.clone(),
             repo.clone(),
             xml_converter,
-            nip,
         );
         (service, client, repo)
     }
@@ -220,7 +216,7 @@ mod tests {
         let (service, _, _) = make_service();
         let query = make_query(SubjectType::Subject2);
 
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 0);
@@ -243,7 +239,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 1);
         assert_eq!(result.updated, 0);
@@ -279,7 +275,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 1);
@@ -305,7 +301,7 @@ mod tests {
         ));
 
         let query = make_query(SubjectType::Subject2);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 0);
@@ -330,7 +326,7 @@ mod tests {
         );
 
         let query = make_query(SubjectType::Subject2);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 0);
@@ -358,7 +354,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject1);
-        service.fetch_invoices(&query).await.unwrap();
+        service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         let found = repo.find_by_ksef_number(&ksef_num).await.unwrap().unwrap();
         assert_eq!(found.direction, Direction::Outgoing);
@@ -382,7 +378,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
         assert_eq!(result.inserted, 1);
         assert!(result.errors.is_empty());
 
@@ -442,14 +438,14 @@ mod tests {
         client.set_fetch_xml(xml.clone());
 
         let query = make_query(SubjectType::Subject2);
-        service.fetch_invoices(&query).await.unwrap();
+        service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         let first = repo.find_by_ksef_number(&ksef_num).await.unwrap().unwrap();
         let first_id = first.id.clone();
 
         // Second fetch — same ksef_number
         client.set_fetch_xml(xml);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
         assert_eq!(result.updated, 1);
         assert_eq!(result.inserted, 0);
 
@@ -492,7 +488,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service.fetch_invoices(&query).await.unwrap();
+        let result = service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         // Both should insert successfully (different ksef_numbers from mock perspective)
         // but our mock fetch returns the same XML which gets parsed with different ksef_numbers
@@ -525,7 +521,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject3);
-        service.fetch_invoices(&query).await.unwrap();
+        service.fetch_invoices(&test_nip(), &query).await.unwrap();
 
         let found = repo.find_by_ksef_number(&ksef_num).await.unwrap().unwrap();
         assert_eq!(found.direction, Direction::Incoming);

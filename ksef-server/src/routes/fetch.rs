@@ -119,7 +119,7 @@ pub async fn fetch_execute(
         subject_type,
     };
 
-    match state.fetch_service.fetch_invoices(&query).await {
+    match state.fetch_service.fetch_invoices(&nip_ctx.account.nip, &query).await {
         Ok(result) => {
             let errors: Vec<FetchErrorDisplay> = result
                 .errors

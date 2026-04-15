@@ -1,32 +1,35 @@
 # fly.io configuration for KSeF Pay
 # Deploy: fly deploy
 # Logs:   fly logs
-# SSH:    fly ssh console
 
-app = "ksefpay"
-primary_region = "waw"
+app = 'ksef-paymoney'
+primary_region = 'fra'
 
 [build]
-  dockerfile = "Dockerfile"
 
 [env]
-  SERVER_HOST = "0.0.0.0"
-  SERVER_PORT = "8080"
   DATABASE_URL = "sqlite:///data/ksef.db"
   KSEF_ENVIRONMENT = "test"
-  KSEF_AUTH_METHOD = "xades"
   RUST_LOG = "info,ksef_core=debug,ksef_server=debug"
+  SERVER_PORT = "3000"
 
-# Mount persistent volume so SQLite survives deploys
 [mounts]
   source = "ksef_data"
   destination = "/data"
 
 [http_service]
-  internal_port = 8080
+  internal_port = 3000
   force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
   [[http_service.checks]]
     path = "/health"
     interval = "30s"
     timeout = "5s"
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1

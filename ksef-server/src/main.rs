@@ -53,28 +53,23 @@ fn read_pem_env(var: &str, raw: &str) -> anyhow::Result<Vec<u8>> {
     Ok(normalized.into_bytes())
 }
 
-fn load_signer(config: &config::Config) -> anyhow::Result<OpenSslXadesSigner> {
+fn load_fallback_signer(config: &config::Config) -> anyhow::Result<OpenSslXadesSigner> {
+    // If explicit cert provided in env, use it as fallback signer.
+    // Otherwise generate a dummy — the SignerFactory handles per-NIP signing.
     match (&config.ksef_cert_pem, &config.ksef_key_pem) {
         (Some(cert_raw), Some(key_raw)) => {
             let cert_pem = read_pem_env("KSEF_CERT_PEM", cert_raw)?;
             let key_pem = read_pem_env("KSEF_KEY_PEM", key_raw)?;
-            tracing::info!("using provided KSeF certificate");
+            tracing::info!("using provided KSeF certificate as fallback signer");
             Ok(OpenSslXadesSigner::from_pem(key_pem, cert_pem))
         }
-        (None, None)
-            if config.ksef_environment
-                != ksef_core::domain::environment::KSeFEnvironment::Production =>
-        {
-            tracing::info!(
-                nip = %config.ksef_nip,
-                "KSEF_CERT_PEM/KSEF_KEY_PEM not set — auto-generating self-signed certificate for test"
-            );
-            OpenSslXadesSigner::generate_self_signed_for_nip(&config.ksef_nip)
-                .map_err(|e| anyhow::anyhow!("auto cert generation failed: {e}"))
+        _ => {
+            // Generate a placeholder cert — SignerFactory creates per-NIP signers at runtime.
+            let placeholder_nip = ksef_core::domain::nip::Nip::parse("5260250274")
+                .expect("well-known NIP is valid");
+            OpenSslXadesSigner::generate_self_signed_for_nip(&placeholder_nip)
+                .map_err(|e| anyhow::anyhow!("fallback signer generation failed: {e}"))
         }
-        _ => Err(anyhow::anyhow!(
-            "KSEF_CERT_PEM and KSEF_KEY_PEM must both be set (or both unset for auto-generation in test/demo)"
-        )),
     }
 }
 
@@ -99,26 +94,11 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(TokenBucketRateLimiter::default()),
         RetryPolicy::default(),
     ));
-    // Fallback signer for backward compat (uses KSEF_NIP from env if set)
-    let fallback_signer = Arc::new(load_signer(&config)?);
+    let fallback_signer = Arc::new(load_fallback_signer(&config)?);
     let signer_factory = Arc::new(OpenSslSignerFactory);
-    let auth_method = match config.ksef_auth_method.trim().to_ascii_lowercase().as_str() {
-        "xades" => AuthMethod::Xades,
-        "token" => {
-            let token = config.ksef_auth_token.clone().ok_or_else(|| {
-                anyhow::anyhow!("KSEF_AUTH_TOKEN is required when KSEF_AUTH_METHOD=token")
-            })?;
-            AuthMethod::Token {
-                context: ksef_core::domain::auth::ContextIdentifier::Nip(config.ksef_nip.clone()),
-                token,
-            }
-        }
-        other => {
-            return Err(anyhow::anyhow!(
-                "invalid KSEF_AUTH_METHOD '{other}', expected 'xades' or 'token'"
-            ));
-        }
-    };
+    // Multi-tenant: auth method is always xades (per-NIP cert from SignerFactory).
+    // Token auth from env is no longer supported — tokens are managed per-NIP account.
+    let auth_method = AuthMethod::Xades;
     let session_service = Arc::new(SessionService::with_signer_factory(
         ksef.clone(),
         fallback_signer,
@@ -144,7 +124,6 @@ async fn main() -> anyhow::Result<()> {
         ksef.clone(),
         db.invoice_repo.clone(),
         xml_converter.clone(),
-        config.ksef_nip.clone(),
     ));
 
     let permission_service = Arc::new(PermissionService::new(ksef.clone()));
