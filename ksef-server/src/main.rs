@@ -126,6 +126,14 @@ async fn main() -> anyhow::Result<()> {
         xml_converter.clone(),
     ));
 
+    let whitelist_client = Arc::new(ksef_core::infra::whitelist::WhiteListClient::new());
+    let company_lookup_service = Arc::new(
+        ksef_core::services::company_lookup_service::CompanyLookupService::new(
+            db.company_cache.clone(),
+            whitelist_client,
+        ),
+    );
+
     let permission_service = Arc::new(PermissionService::new(ksef.clone()));
     let token_mgmt_service = Arc::new(TokenMgmtService::new(ksef.clone()));
     let export_service = Arc::new(ExportService::new(ksef.clone(), decryptor));
@@ -162,6 +170,8 @@ async fn main() -> anyhow::Result<()> {
         user_repo: db.user_repo.clone(),
         nip_account_repo: db.nip_account_repo.clone(),
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        company_lookup_service,
+        invoice_sequence: db.invoice_sequence.clone(),
         invoice_service,
         fetch_service,
         session_service,

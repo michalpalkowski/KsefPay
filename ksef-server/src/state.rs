@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use ksef_core::domain::environment::KSeFEnvironment;
+use ksef_core::ports::invoice_sequence::InvoiceSequenceRepository;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::user_repository::UserRepository;
 use ksef_core::services::batch_service::BatchService;
+use ksef_core::services::company_lookup_service::CompanyLookupService;
 use ksef_core::services::export_service::ExportService;
 use ksef_core::services::fetch_service::FetchService;
 use ksef_core::services::invoice_service::InvoiceService;
@@ -24,6 +26,8 @@ pub struct AppState {
     pub ksef_environment: KSeFEnvironment,
     pub user_repo: Arc<dyn UserRepository>,
     pub nip_account_repo: Arc<dyn NipAccountRepository>,
+    pub company_lookup_service: Arc<CompanyLookupService>,
+    pub invoice_sequence: Arc<dyn InvoiceSequenceRepository>,
     pub invoice_service: Arc<InvoiceService>,
     pub fetch_service: Arc<FetchService>,
     pub session_service: Arc<SessionService>,

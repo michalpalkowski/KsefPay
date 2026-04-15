@@ -4,6 +4,7 @@ use axum::response::Redirect;
 use axum::routing::{get, post};
 
 pub mod accounts;
+mod api;
 pub mod auth;
 mod dashboard;
 mod export;
@@ -19,6 +20,8 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // API (JSON, no HTML)
+        .route("/api/nip-lookup/{nip}", get(api::nip_lookup))
         // Public routes (no auth required)
         .route("/login", get(auth::login_page).post(auth::login))
         .route("/register", get(auth::register_page).post(auth::register))

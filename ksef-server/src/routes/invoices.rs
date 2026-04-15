@@ -3,12 +3,12 @@ use axum::Form;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::Deserialize;
 
 use ksef_core::domain::invoice::{
-    Address, CountryCode, Currency, Direction, Invoice, InvoiceId, InvoiceType, LineItem, Money,
-    Party, PaymentMethod, Quantity, VatRate,
+    format_invoice_number, Address, CountryCode, Currency, Direction, Invoice, InvoiceId,
+    InvoiceType, LineItem, Money, Party, PaymentMethod, Quantity, VatRate,
 };
 use ksef_core::domain::nip::Nip;
 use ksef_core::error::RepositoryError;
@@ -143,9 +143,14 @@ pub struct InvoiceFormData {
     pub buyer_name: String,
     pub buyer_address_line1: String,
     pub buyer_address_line2: String,
+    // Single-item fields (backward compat from hidden fields)
+    #[serde(default)]
     pub item_description: String,
+    #[serde(default)]
     pub item_quantity: String,
+    #[serde(default)]
     pub item_unit_price: String,
+    #[serde(default)]
     pub item_vat_rate: String,
     pub payment_method: String,
     pub payment_deadline: String,
@@ -223,8 +228,38 @@ fn new_form_defaults(nip_ctx: &NipContext) -> InvoiceNewTemplate {
     }
 }
 
-pub async fn new_form(nip_ctx: NipContext) -> impl IntoResponse {
-    render(new_form_defaults(&nip_ctx))
+pub async fn new_form(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+) -> impl IntoResponse {
+    let mut tmpl = new_form_defaults(&nip_ctx);
+
+    // Auto-fill seller data from Biała Lista cache
+    if let Ok(info) = state
+        .company_lookup_service
+        .lookup(&nip_ctx.account.nip)
+        .await
+    {
+        tmpl.f.seller_name = info.name;
+        let (line1, line2) = split_address(&info.address);
+        tmpl.f.seller_address_line1 = line1;
+        tmpl.f.seller_address_line2 = line2;
+        if let Some(account) = info.bank_accounts.first() {
+            tmpl.f.bank_account = account.clone();
+        }
+    }
+
+    render(tmpl)
+}
+
+/// Split "STREET, POSTCODE CITY" into (line1, line2).
+fn split_address(address: &str) -> (String, String) {
+    if let Some(pos) = address.rfind(", ") {
+        let (line1, rest) = address.split_at(pos);
+        (line1.to_string(), rest[2..].to_string())
+    } else {
+        (address.to_string(), String::new())
+    }
 }
 
 pub async fn detail(
@@ -266,36 +301,67 @@ pub async fn create(
 ) -> Response {
     let nip_str = nip_ctx.account.nip.to_string();
     let form_values = InvoiceFormValues::from(form.clone());
-    match parse_form_to_input(form) {
-        Ok(input) => match state.invoice_service.create_draft(input).await {
-            Ok(invoice) => {
-                Redirect::to(&format!("/accounts/{nip_str}/invoices/{}", invoice.id))
-                    .into_response()
+
+    let mut input = match parse_form_to_input(form) {
+        Ok(input) => input,
+        Err(e) => {
+            return render_with_status(
+                StatusCode::BAD_REQUEST,
+                InvoiceNewTemplate {
+                    active: "/invoices",
+                    nip_prefix: Some(nip_str),
+                    user_email: nip_ctx.user.email,
+                    error: Some(e),
+                    f: form_values,
+                },
+            );
+        }
+    };
+
+    // Auto-numbering: if invoice_number is empty, generate FV/YYYY/MM/NNN
+    if input.invoice_number.trim().is_empty() {
+        let year = input.issue_date.year();
+        let month = input.issue_date.month();
+        match state
+            .invoice_sequence
+            .next_number(&nip_ctx.account.nip, year, month)
+            .await
+        {
+            Ok(seq) => {
+                input.invoice_number = format_invoice_number("FV", year, month, seq);
             }
             Err(e) => {
-                let status = status_for_service_error(&e);
-                render_with_status(
-                    status,
+                return render_with_status(
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     InvoiceNewTemplate {
                         active: "/invoices",
                         nip_prefix: Some(nip_str),
                         user_email: nip_ctx.user.email,
-                        error: Some(format!("Nie udalo sie utworzyc faktury: {e}")),
+                        error: Some(format!("Blad generowania numeru faktury: {e}")),
                         f: form_values,
                     },
-                )
+                );
             }
-        },
-        Err(e) => render_with_status(
-            StatusCode::BAD_REQUEST,
-            InvoiceNewTemplate {
-                active: "/invoices",
-                nip_prefix: Some(nip_str),
-                user_email: nip_ctx.user.email,
-                error: Some(e),
-                f: form_values,
-            },
-        ),
+        }
+    }
+
+    match state.invoice_service.create_draft(input).await {
+        Ok(invoice) => {
+            Redirect::to(&format!("/accounts/{nip_str}/invoices/{}", invoice.id)).into_response()
+        }
+        Err(e) => {
+            let status = status_for_service_error(&e);
+            render_with_status(
+                status,
+                InvoiceNewTemplate {
+                    active: "/invoices",
+                    nip_prefix: Some(nip_str),
+                    user_email: nip_ctx.user.email,
+                    error: Some(format!("Nie udalo sie utworzyc faktury: {e}")),
+                    f: form_values,
+                },
+            )
+        }
     }
 }
 
@@ -340,31 +406,17 @@ fn parse_form_to_input(form: InvoiceFormData) -> Result<CreateInvoiceInput, Stri
     let payment_deadline = NaiveDate::parse_from_str(&form.payment_deadline, "%Y-%m-%d")
         .map_err(|e| format!("Termin platnosci: {e}"))?;
 
-    let quantity = Quantity::parse(&form.item_quantity).map_err(|e| format!("Ilosc: {e}"))?;
-    let unit_price: Money = form
-        .item_unit_price
-        .parse()
-        .map_err(|e| format!("Cena jednostkowa: {e}"))?;
-    let vat_rate: VatRate = form
-        .item_vat_rate
-        .parse()
-        .map_err(|e| format!("Stawka VAT: {e}"))?;
+    if form.item_description.is_empty() {
+        return Err("Opis pozycji jest wymagany".to_string());
+    }
 
-    let net = multiply_money_by_quantity(unit_price, &quantity)
-        .map_err(|e| format!("Wartosc netto: {e}"))?;
-    let net_grosze = net.grosze();
-
-    let vat_grosze = match vat_rate.percentage() {
-        Some(pct) => {
-            let vat_numerator = i128::from(net_grosze) * i128::from(pct);
-            let rounded = div_round_half_away_from_zero(vat_numerator, 100);
-            i64::try_from(rounded)
-                .map_err(|_| "wartosc VAT przekracza zakres obslugiwanych kwot".to_string())?
-        }
-        None => 0,
-    };
-    let vat = Money::from_grosze(vat_grosze);
-    let gross = Money::from_grosze(net_grosze + vat_grosze);
+    let line_items = parse_line_item(
+        1,
+        &form.item_description,
+        &form.item_quantity,
+        &form.item_unit_price,
+        &form.item_vat_rate,
+    )?;
 
     let payment_method = match form.payment_method.as_str() {
         "cash" => PaymentMethod::Cash,
@@ -375,18 +427,6 @@ fn parse_form_to_input(form: InvoiceFormData) -> Result<CreateInvoiceInput, Stri
                 "Metoda platnosci: nieobslugiwana wartosc '{other}' (oczekiwane: transfer, cash, card)"
             ));
         }
-    };
-
-    let line_item = LineItem {
-        line_number: 1,
-        description: form.item_description,
-        unit: None,
-        quantity,
-        unit_net_price: Some(unit_price),
-        net_value: net,
-        vat_rate,
-        vat_amount: vat,
-        gross_value: gross,
     };
 
     Ok(CreateInvoiceInput {
@@ -418,10 +458,55 @@ fn parse_form_to_input(form: InvoiceFormData) -> Result<CreateInvoiceInput, Stri
             },
         },
         currency: Currency::pln(),
-        line_items: vec![line_item],
+        line_items: vec![line_items],
         payment_method,
         payment_deadline,
         bank_account: form.bank_account.filter(|s| !s.is_empty()),
+    })
+}
+
+fn parse_line_item(
+    line_number: u32,
+    description: &str,
+    quantity_raw: &str,
+    unit_price_raw: &str,
+    vat_rate_raw: &str,
+) -> Result<LineItem, String> {
+    let ctx = format!("Pozycja {line_number}");
+
+    let quantity =
+        Quantity::parse(quantity_raw).map_err(|e| format!("{ctx} — ilosc: {e}"))?;
+    let unit_price: Money = unit_price_raw
+        .parse()
+        .map_err(|e| format!("{ctx} — cena: {e}"))?;
+    let vat_rate: VatRate = vat_rate_raw
+        .parse()
+        .map_err(|e| format!("{ctx} — stawka VAT: {e}"))?;
+
+    let net = multiply_money_by_quantity(unit_price, &quantity)
+        .map_err(|e| format!("{ctx} — wartosc netto: {e}"))?;
+    let net_grosze = net.grosze();
+
+    let vat_grosze = match vat_rate.percentage() {
+        Some(pct) => {
+            let vat_numerator = i128::from(net_grosze) * i128::from(pct);
+            let rounded = div_round_half_away_from_zero(vat_numerator, 100);
+            i64::try_from(rounded)
+                .map_err(|_| format!("{ctx} — wartosc VAT przekracza zakres"))?
+        }
+        None => 0,
+    };
+
+    Ok(LineItem {
+        line_number,
+        description: description.to_string(),
+        unit: None,
+        quantity,
+        unit_net_price: Some(unit_price),
+        net_value: net,
+        vat_rate,
+        vat_amount: Money::from_grosze(vat_grosze),
+        gross_value: Money::from_grosze(net_grosze + vat_grosze),
     })
 }
 
@@ -556,7 +641,7 @@ mod tests {
         let mut form = base_form();
         form.item_quantity = "abc".to_string();
         let err = parse_form_to_input(form).unwrap_err();
-        assert!(err.contains("Ilosc"));
+        assert!(err.contains("ilosc"), "unexpected error: {err}");
     }
 
     #[test]

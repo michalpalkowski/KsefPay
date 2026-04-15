@@ -19,7 +19,8 @@
       <legend>Dane faktury</legend>
       <div class="form-row">
         <label for="invoice_number">Numer faktury</label>
-        <input type="text" name="invoice_number" id="invoice_number" value="{{ f.invoice_number }}" placeholder="FV/2026/04/001" required />
+        <input type="text" name="invoice_number" id="invoice_number" value="{{ f.invoice_number }}" placeholder="Automatyczny (FV/2026/04/001)" />
+        <small class="form-hint">Zostaw puste dla automatycznej numeracji</small>
       </div>
       <div class="form-row-group">
         <div class="form-row">
@@ -37,7 +38,7 @@
       <legend>Sprzedawca</legend>
       <div class="form-row">
         <label for="seller_nip">NIP</label>
-        <input type="text" name="seller_nip" id="seller_nip" value="{{ f.seller_nip }}" required />
+        <input type="text" name="seller_nip" id="seller_nip" value="{{ f.seller_nip }}" readonly />
       </div>
       <div class="form-row">
         <label for="seller_name">Nazwa firmy</label>
@@ -57,7 +58,8 @@
       <legend>Nabywca</legend>
       <div class="form-row">
         <label for="buyer_nip">NIP</label>
-        <input type="text" name="buyer_nip" id="buyer_nip" value="{{ f.buyer_nip }}" placeholder="1234567890" required />
+        <input type="text" name="buyer_nip" id="buyer_nip" value="{{ f.buyer_nip }}" placeholder="Wpisz 10 cyfr NIP" required maxlength="13" />
+        <small id="buyer-nip-status" class="form-hint"></small>
       </div>
       <div class="form-row">
         <label for="buyer_name">Nazwa firmy</label>
@@ -74,32 +76,43 @@
     </fieldset>
 
     <fieldset>
-      <legend>Pozycja</legend>
-      <div class="form-row">
-        <label for="item_description">Opis uslugi/towaru</label>
-        <input type="text" name="item_description" id="item_description" value="{{ f.item_description }}" placeholder="Uslugi programistyczne" required />
+      <legend>Pozycje</legend>
+      <div id="line-items">
+        <div class="line-item" data-index="0">
+          <div class="form-row">
+            <label>Opis uslugi/towaru</label>
+            <input type="text" name="items[0][description]" value="{{ f.item_description }}" placeholder="Uslugi programistyczne" required />
+          </div>
+          <div class="form-row-group">
+            <div class="form-row">
+              <label>Ilosc</label>
+              <input type="text" name="items[0][quantity]" value="{{ f.item_quantity }}" required />
+            </div>
+            <div class="form-row">
+              <label>Cena netto (PLN)</label>
+              <input type="text" name="items[0][unit_price]" value="{{ f.item_unit_price }}" placeholder="150.00" required />
+            </div>
+            <div class="form-row">
+              <label>Stawka VAT</label>
+              <select name="items[0][vat_rate]">
+                <option value="23" {% if f.item_vat_rate == "23" %}selected{% endif %}>23%</option>
+                <option value="8" {% if f.item_vat_rate == "8" %}selected{% endif %}>8%</option>
+                <option value="5" {% if f.item_vat_rate == "5" %}selected{% endif %}>5%</option>
+                <option value="0" {% if f.item_vat_rate == "0" %}selected{% endif %}>0%</option>
+                <option value="zw" {% if f.item_vat_rate == "zw" %}selected{% endif %}>Zwolniony</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="form-row-group">
-        <div class="form-row">
-          <label for="item_quantity">Ilosc</label>
-          <input type="text" name="item_quantity" id="item_quantity" value="{{ f.item_quantity }}" required />
-        </div>
-        <div class="form-row">
-          <label for="item_unit_price">Cena netto (PLN)</label>
-          <input type="text" name="item_unit_price" id="item_unit_price" value="{{ f.item_unit_price }}" placeholder="150.00" required />
-        </div>
-        <div class="form-row">
-          <label for="item_vat_rate">Stawka VAT</label>
-          <select name="item_vat_rate" id="item_vat_rate">
-            <option value="23" {% if f.item_vat_rate == "23" %}selected{% endif %}>23%</option>
-            <option value="8" {% if f.item_vat_rate == "8" %}selected{% endif %}>8%</option>
-            <option value="5" {% if f.item_vat_rate == "5" %}selected{% endif %}>5%</option>
-            <option value="0" {% if f.item_vat_rate == "0" %}selected{% endif %}>0%</option>
-            <option value="zw" {% if f.item_vat_rate == "zw" %}selected{% endif %}>Zwolniony</option>
-          </select>
-        </div>
-      </div>
+      <button type="button" id="add-line-item" class="btn btn-secondary btn-small">+ Dodaj pozycje</button>
     </fieldset>
+
+    <!-- Backward compat: single-item fields for existing handler -->
+    <input type="hidden" name="item_description" id="compat_desc" value="" />
+    <input type="hidden" name="item_quantity" id="compat_qty" value="" />
+    <input type="hidden" name="item_unit_price" id="compat_price" value="" />
+    <input type="hidden" name="item_vat_rate" id="compat_vat" value="" />
 
     <fieldset>
       <legend>Platnosc</legend>
@@ -129,4 +142,112 @@
     </div>
   </form>
 </div>
+
+<script>
+(function() {
+  // --- NIP autocomplete for buyer ---
+  var nipInput = document.getElementById('buyer_nip');
+  var statusEl = document.getElementById('buyer-nip-status');
+  var nameEl = document.getElementById('buyer_name');
+  var addr1El = document.getElementById('buyer_address_line1');
+  var addr2El = document.getElementById('buyer_address_line2');
+  var lastLookedUp = '';
+
+  function cleanNip(raw) {
+    return raw.replace(/[\s\-]/g, '');
+  }
+
+  function lookupNip() {
+    var nip = cleanNip(nipInput.value);
+    if (nip.length !== 10 || !/^\d{10}$/.test(nip) || nip === lastLookedUp) return;
+    lastLookedUp = nip;
+    statusEl.textContent = 'Szukam...';
+    statusEl.className = 'form-hint';
+
+    fetch('/api/nip-lookup/' + nip)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.found) {
+          nameEl.value = data.name;
+          var parts = (data.address || '').split(', ');
+          addr1El.value = parts[0] || '';
+          addr2El.value = parts.slice(1).join(', ');
+          statusEl.textContent = data.vat_status === 'Czynny'
+            ? 'Czynny podatnik VAT'
+            : data.vat_status || 'Znaleziono';
+          statusEl.className = 'form-hint text-success';
+        } else {
+          statusEl.textContent = 'Nie znaleziono w rejestrze VAT — wpisz dane recznie';
+          statusEl.className = 'form-hint text-warning';
+        }
+      })
+      .catch(function() {
+        statusEl.textContent = 'Blad pobierania danych';
+        statusEl.className = 'form-hint text-error';
+      });
+  }
+
+  nipInput.addEventListener('input', lookupNip);
+  nipInput.addEventListener('blur', lookupNip);
+
+  // --- Dynamic line items ---
+  var lineItems = document.getElementById('line-items');
+  var addBtn = document.getElementById('add-line-item');
+  var itemIndex = 1;
+
+  addBtn.addEventListener('click', function() {
+    var idx = itemIndex++;
+    var div = document.createElement('div');
+    div.className = 'line-item';
+    div.dataset.index = idx;
+    div.innerHTML =
+      '<div class="form-row">' +
+        '<label>Opis uslugi/towaru</label>' +
+        '<input type="text" name="items[' + idx + '][description]" placeholder="Usluga" required />' +
+      '</div>' +
+      '<div class="form-row-group">' +
+        '<div class="form-row">' +
+          '<label>Ilosc</label>' +
+          '<input type="text" name="items[' + idx + '][quantity]" value="1" required />' +
+        '</div>' +
+        '<div class="form-row">' +
+          '<label>Cena netto (PLN)</label>' +
+          '<input type="text" name="items[' + idx + '][unit_price]" placeholder="150.00" required />' +
+        '</div>' +
+        '<div class="form-row">' +
+          '<label>Stawka VAT</label>' +
+          '<select name="items[' + idx + '][vat_rate]">' +
+            '<option value="23" selected>23%</option>' +
+            '<option value="8">8%</option>' +
+            '<option value="5">5%</option>' +
+            '<option value="0">0%</option>' +
+            '<option value="zw">Zwolniony</option>' +
+          '</select>' +
+        '</div>' +
+      '</div>' +
+      '<button type="button" class="btn btn-danger btn-small remove-item">Usun</button>';
+    lineItems.appendChild(div);
+  });
+
+  lineItems.addEventListener('click', function(e) {
+    if (e.target.classList.contains('remove-item')) {
+      e.target.closest('.line-item').remove();
+    }
+  });
+
+  // --- Sync first item to backward-compat hidden fields on submit ---
+  document.querySelector('.invoice-form').addEventListener('submit', function() {
+    var first = lineItems.querySelector('.line-item');
+    if (!first) return;
+    var inputs = first.querySelectorAll('input, select');
+    inputs.forEach(function(el) {
+      var name = el.name;
+      if (name.includes('[description]')) document.getElementById('compat_desc').value = el.value;
+      if (name.includes('[quantity]')) document.getElementById('compat_qty').value = el.value;
+      if (name.includes('[unit_price]')) document.getElementById('compat_price').value = el.value;
+      if (name.includes('[vat_rate]')) document.getElementById('compat_vat').value = el.value;
+    });
+  });
+})();
+</script>
 {% endblock %}
