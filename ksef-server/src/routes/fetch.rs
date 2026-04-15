@@ -138,9 +138,17 @@ pub async fn fetch_execute(
         subject_type,
     };
 
-    // Mark as running
+    // Prevent duplicate background jobs for the same account.
     {
         let mut jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
+        if matches!(jobs.get(&account_id), Some(FetchJobStatus::Running)) {
+            return render_form_error(
+                nip_str,
+                user_email,
+                "Pobieranie dla tego konta już trwa. Poczekaj na zakończenie.".to_string(),
+                csrf_token,
+            );
+        }
         jobs.insert(account_id.clone(), FetchJobStatus::Running);
     }
 

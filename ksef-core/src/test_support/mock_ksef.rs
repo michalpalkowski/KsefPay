@@ -123,7 +123,9 @@ impl XadesSigner for MockXadesSigner {
 /// Mock `KSeFClient` for session/invoice operations.
 pub struct MockKSeFClient {
     pub invoices_sent: Mutex<u32>,
+    pub query_count: Mutex<u32>,
     query_results: Mutex<Vec<InvoiceMetadata>>,
+    query_errors: Mutex<Vec<KSeFError>>,
     fetch_xml: Mutex<Option<UntrustedInvoiceXml>>,
 }
 
@@ -132,7 +134,9 @@ impl MockKSeFClient {
     pub fn new() -> Self {
         Self {
             invoices_sent: Mutex::new(0),
+            query_count: Mutex::new(0),
             query_results: Mutex::new(Vec::new()),
+            query_errors: Mutex::new(Vec::new()),
             fetch_xml: Mutex::new(None),
         }
     }
@@ -140,6 +144,11 @@ impl MockKSeFClient {
     /// Set the results that `query_invoices` will return.
     pub fn set_query_results(&self, results: Vec<InvoiceMetadata>) {
         *self.query_results.lock().unwrap() = results;
+    }
+
+    /// Set a queue of errors returned by `query_invoices` before successful results.
+    pub fn set_query_errors(&self, errors: Vec<KSeFError>) {
+        *self.query_errors.lock().unwrap() = errors;
     }
 
     /// Set the XML that `fetch_invoice` will return for any invoice.
@@ -221,6 +230,13 @@ impl KSeFClient for MockKSeFClient {
         _access_token: &AccessToken,
         _criteria: &InvoiceQuery,
     ) -> Result<Vec<InvoiceMetadata>, KSeFError> {
+        *self.query_count.lock().unwrap() += 1;
+
+        let mut errors = self.query_errors.lock().unwrap();
+        if !errors.is_empty() {
+            return Err(errors.remove(0));
+        }
+
         let guard = self.query_results.lock().unwrap();
         Ok(guard.clone())
     }

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::domain::invoice::Direction;
 use crate::domain::nip::Nip;
@@ -10,6 +11,10 @@ use crate::ports::invoice_repository::InvoiceRepository;
 use crate::ports::invoice_xml::InvoiceXmlConverter;
 use crate::ports::ksef_client::KSeFClient;
 use crate::services::session_service::{SessionService, SessionServiceError};
+use tracing::warn;
+
+const QUERY_RATE_LIMIT_MAX_RETRIES: u32 = 3;
+const MIN_RATE_LIMIT_WAIT_MS: u64 = 1_000;
 
 /// Orchestrates fetching invoices from `KSeF`: query -> download -> parse -> upsert.
 pub struct FetchService {
@@ -90,8 +95,7 @@ impl FetchService {
     ) -> Result<FetchResult, FetchServiceError> {
         let token_pair = self.session_service.ensure_token(nip).await?;
         let metadata_list = self
-            .ksef_client
-            .query_invoices(&token_pair.access_token, query)
+            .query_metadata_with_rate_limit_retry(&token_pair.access_token, query)
             .await?;
 
         let direction = query.subject_type.to_direction();
@@ -128,6 +132,34 @@ impl FetchService {
         }
 
         Ok(result)
+    }
+
+    async fn query_metadata_with_rate_limit_retry(
+        &self,
+        access_token: &crate::domain::auth::AccessToken,
+        query: &InvoiceQuery,
+    ) -> Result<Vec<crate::domain::session::InvoiceMetadata>, KSeFError> {
+        let mut retries_done = 0u32;
+
+        loop {
+            match self.ksef_client.query_invoices(access_token, query).await {
+                Ok(metadata) => return Ok(metadata),
+                Err(KSeFError::RateLimited { retry_after_ms })
+                    if retries_done < QUERY_RATE_LIMIT_MAX_RETRIES =>
+                {
+                    retries_done += 1;
+                    let wait_ms = retry_after_ms.max(MIN_RATE_LIMIT_WAIT_MS);
+                    warn!(
+                        retry_after_ms = wait_ms,
+                        retries_done,
+                        max_retries = QUERY_RATE_LIMIT_MAX_RETRIES,
+                        "KSeF query rate-limited, waiting before retry"
+                    );
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     async fn process_single_invoice(
@@ -268,6 +300,37 @@ mod tests {
         assert_eq!(found.status, InvoiceStatus::Fetched);
         assert_eq!(found.direction, Direction::Incoming);
         assert!(found.raw_xml.is_some());
+    }
+
+    #[tokio::test]
+    async fn fetch_retries_query_after_rate_limit() {
+        let (service, client, repo) = make_service();
+
+        let invoice = sample_invoice();
+        let xml = invoice_to_xml(&invoice).unwrap();
+        let ksef_num = KSeFNumber::new("KSeF-FETCH-RL-001".to_string());
+
+        client.set_query_errors(vec![KSeFError::RateLimited { retry_after_ms: 1 }]);
+        client.set_query_results(vec![crate::domain::session::InvoiceMetadata {
+            ksef_number: ksef_num.clone(),
+            subject_nip: "5260250274".to_string(),
+            invoice_date: chrono::NaiveDate::from_ymd_opt(2026, 4, 13).unwrap(),
+        }]);
+        client.set_fetch_xml(xml);
+
+        let query = make_query(SubjectType::Subject2);
+        let result = service
+            .fetch_invoices(&test_nip(), &test_account_id(), &query)
+            .await
+            .unwrap();
+
+        assert_eq!(result.inserted, 1);
+        assert_eq!(result.updated, 0);
+        assert!(result.errors.is_empty());
+        assert_eq!(*client.query_count.lock().unwrap(), 2);
+
+        let found = repo.find_by_ksef_number(&ksef_num).await.unwrap();
+        assert!(found.is_some());
     }
 
     #[tokio::test]
