@@ -54,10 +54,7 @@ pub fn router() -> Router<AppState> {
             post(invoices::submit),
         )
         // Sessions
-        .route(
-            "/accounts/{nip}/sessions",
-            get(sessions::sessions_page),
-        )
+        .route("/accounts/{nip}/sessions", get(sessions::sessions_page))
         .route(
             "/accounts/{nip}/sessions/authenticate",
             post(sessions::authenticate),
@@ -85,10 +82,7 @@ pub fn router() -> Router<AppState> {
         )
         // Tokens
         .route("/accounts/{nip}/tokens", get(tokens::tokens_page))
-        .route(
-            "/accounts/{nip}/tokens/generate",
-            post(tokens::generate),
-        )
+        .route("/accounts/{nip}/tokens/generate", post(tokens::generate))
         .route(
             "/accounts/{nip}/tokens/{token_id}/revoke",
             post(tokens::revoke),

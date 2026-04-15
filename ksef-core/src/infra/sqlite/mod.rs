@@ -12,6 +12,7 @@ use crate::domain::job::{Job, JobId};
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
+use crate::domain::token_mgmt::LocalToken;
 use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
 use crate::ports::audit_log::AuditLogRepository;
@@ -19,6 +20,7 @@ use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use crate::ports::invoice_sequence::InvoiceSequenceRepository;
 use crate::ports::job_queue::JobQueue;
+use crate::ports::local_token_repository::LocalTokenRepository;
 use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
@@ -58,6 +60,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../migrations/sqlite/007_security_hardening.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/008_nip_account_tokens.sql"
     ))
     .execute(pool)
     .await?;
@@ -595,5 +602,31 @@ impl AtomicScopeFactory for Db {
         Ok(Box::new(Tx {
             inner: Mutex::new(Some(transaction)),
         }))
+    }
+}
+
+#[async_trait]
+impl LocalTokenRepository for Db {
+    async fn save(&self, token: &LocalToken) -> Result<(), RepositoryError> {
+        queries::local_token::save(&self.pool, token).await
+    }
+
+    async fn list_by_account(
+        &self,
+        account_id: &NipAccountId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        queries::local_token::list_by_account(&self.pool, account_id).await
+    }
+
+    async fn list_by_account_for_user(
+        &self,
+        account_id: &NipAccountId,
+        user_id: &UserId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        queries::local_token::list_by_account_for_user(&self.pool, account_id, user_id).await
+    }
+
+    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError> {
+        queries::local_token::mark_revoked(&self.pool, ksef_token_id).await
     }
 }

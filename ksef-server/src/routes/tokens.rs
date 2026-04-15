@@ -4,11 +4,12 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use serde::Deserialize;
 use tower_sessions::Session;
+use uuid::Uuid;
 
 use ksef_core::domain::audit::AuditAction;
 use ksef_core::domain::permission::PermissionType;
-use ksef_core::domain::token_mgmt::ManagedToken;
-use ksef_core::ports::ksef_tokens::{TokenGenerateRequest, TokenQueryRequest};
+use ksef_core::domain::token_mgmt::LocalToken;
+use ksef_core::ports::ksef_tokens::TokenGenerateRequest;
 
 use crate::audit_log::log_action as log_audit_action;
 use crate::csrf::ensure_csrf_token;
@@ -22,7 +23,7 @@ struct TokensTemplate {
     active: &'static str,
     nip_prefix: Option<String>,
     user_email: String,
-    tokens: Vec<ManagedToken>,
+    tokens: Vec<LocalToken>,
     error: Option<String>,
     success: Option<String>,
     csrf_token: String,
@@ -73,48 +74,37 @@ pub async fn tokens_page(
     nip_ctx: NipContext,
     session: Session,
 ) -> Response {
-    let nip = &nip_ctx.account.nip;
-    let nip_str = nip.to_string();
+    let nip_str = nip_ctx.account.nip.to_string();
+    let user_id = nip_ctx.user.id.clone();
     let user_email = nip_ctx.user.email;
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
-    let token = match state.session_service.ensure_token(nip).await {
-        Ok(tp) => tp.access_token,
+    let tokens = match state
+        .local_token_repo
+        .list_by_account_for_user(&nip_ctx.account.id, &user_id)
+        .await
+    {
+        Ok(t) => t,
         Err(e) => {
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostępu: {e}")),
+                Some(format!("Pobieranie tokenów nie powiodło się: {e}")),
                 None,
                 csrf_token,
             );
         }
     };
 
-    let request = TokenQueryRequest {
-        status: None,
-        limit: Some(50),
-        offset: None,
-    };
-
-    match state.token_mgmt_service.query(&token, &request).await {
-        Ok(response) => render(TokensTemplate {
-            active: "/tokens",
-            nip_prefix: Some(nip_str),
-            user_email,
-            tokens: response.items,
-            error: None,
-            success: None,
-            csrf_token,
-        }),
-        Err(e) => empty_page(
-            nip_str,
-            user_email,
-            Some(format!("Pobieranie tokenów nie powiodło się: {e}")),
-            None,
-            csrf_token,
-        ),
-    }
+    render(TokensTemplate {
+        active: "/tokens",
+        nip_prefix: Some(nip_str),
+        user_email,
+        tokens,
+        error: None,
+        success: None,
+        csrf_token,
+    })
 }
 
 pub async fn generate(
@@ -173,9 +163,10 @@ pub async fn generate(
         }
     };
 
+    let description = form.description.filter(|s| !s.trim().is_empty());
     let request = TokenGenerateRequest {
-        permissions,
-        description: form.description.filter(|s| !s.trim().is_empty()),
+        permissions: permissions.clone(),
+        description: description.clone(),
         valid_to: None,
     };
 
@@ -192,13 +183,35 @@ pub async fn generate(
             )
             .await;
 
-            empty_page(
-                nip_str,
-                user_email,
-                None,
-                Some(format!("Token wygenerowany: {}", generated.id)),
-                csrf_token,
-            )
+            // Persist locally so the page can filter by NIP + user.
+            let local = LocalToken {
+                id: Uuid::new_v4(),
+                nip_account_id: nip_ctx.account.id.clone(),
+                user_id: user_id.clone(),
+                ksef_token_id: generated.id.clone(),
+                permissions,
+                description,
+                created_at: generated.created_at,
+                revoked_at: None,
+            };
+            if let Err(e) = state.local_token_repo.save(&local).await {
+                tracing::warn!(
+                    token_id = %generated.id,
+                    "failed to persist local token entry: {e}"
+                );
+                return empty_page(
+                    nip_str,
+                    user_email,
+                    Some(format!(
+                        "Token został wygenerowany w KSeF (ID: {}), ale zapis lokalny nie powiódł się: {e}",
+                        generated.id
+                    )),
+                    None,
+                    csrf_token,
+                );
+            }
+
+            Redirect::to(&format!("/accounts/{nip_str}/tokens")).into_response()
         }
         Err(e) => empty_page(
             nip_str,
@@ -249,6 +262,10 @@ pub async fn revoke(
                 client_ip(&headers),
             )
             .await;
+
+            if let Err(e) = state.local_token_repo.mark_revoked(&token_id).await {
+                tracing::warn!(token_id = %token_id, "failed to mark local token revoked: {e}");
+            }
 
             Redirect::to(&format!("/accounts/{nip_str}/tokens")).into_response()
         }

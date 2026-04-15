@@ -187,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
         batch_service,
         permission_service,
         token_mgmt_service,
+        local_token_repo: db.local_token_repo.clone(),
         export_service,
         offline_service,
         qr_service,

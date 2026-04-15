@@ -2,8 +2,11 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
+use crate::domain::nip_account::NipAccountId;
 use crate::domain::permission::PermissionType;
+use crate::domain::user::UserId;
 use crate::error::DomainError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +52,29 @@ pub struct ManagedToken {
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// A token entry stored locally, scoped to a specific NIP account and user.
+///
+/// Unlike `ManagedToken` (which reflects the live KSeF API response), this
+/// is persisted in the local DB so that the tokens page can be filtered per-NIP.
+#[derive(Debug, Clone)]
+pub struct LocalToken {
+    pub id: Uuid,
+    pub nip_account_id: NipAccountId,
+    pub user_id: UserId,
+    pub ksef_token_id: String,
+    pub permissions: Vec<PermissionType>,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl LocalToken {
+    #[must_use]
+    pub fn is_revoked(&self) -> bool {
+        self.revoked_at.is_some()
+    }
 }
 
 #[cfg(test)]
