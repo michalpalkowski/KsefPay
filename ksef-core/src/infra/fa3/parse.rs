@@ -113,13 +113,13 @@ fn optional_text(parent: &Node, element_name: &str) -> Option<String> {
 fn validate_schema_version(naglowek: &Node) -> Result<(), XmlError> {
     let kod = required_child(naglowek, "KodFormularza")?;
 
-    let wersja = kod
+    // Verify that wersjaSchemy attribute exists and looks like an FA(3) version.
+    // We don't reject unknown versions — KSeF may issue newer revisions (1-0E, 1-1E, ...)
+    // and the XML structure stays backward compatible. We validate the actual content,
+    // not the version number.
+    let _wersja = kod
         .attribute("wersjaSchemy")
         .ok_or_else(|| XmlError::MissingElement("KodFormularza@wersjaSchemy".to_string()))?;
-
-    if wersja != "1-0E" {
-        return Err(XmlError::UnsupportedSchemaVersion(wersja.to_string()));
-    }
 
     Ok(())
 }
@@ -429,7 +429,9 @@ mod tests {
     // --- Naglowek ---
 
     #[test]
-    fn rejects_unsupported_schema_version() {
+    fn accepts_unknown_schema_version() {
+        // Parser should not reject unknown schema versions — KSeF may issue newer
+        // revisions and the XML structure stays backward compatible.
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">
   <Naglowek>
@@ -445,6 +447,33 @@ mod tests {
   <Platnosc><TerminPlatnosci><Termin>2026-04-27</Termin></TerminPlatnosci><FormaPlatnosci>6</FormaPlatnosci></Platnosc></Fa>
 </Faktura>"#;
 
+        let invoice = xml_to_invoice(
+            &InvoiceXml::new(xml.to_string()),
+            Direction::Incoming,
+            &KSeFNumber::new("KSeF-X".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(invoice.invoice_number, "FV/1");
+    }
+
+    #[test]
+    fn rejects_missing_schema_version_attribute() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">
+  <Naglowek>
+    <KodFormularza kodSystemowy="FA (3)">FA</KodFormularza>
+    <WariantFormularza>3</WariantFormularza>
+    <DataWytworzeniaFa>2026-04-13T00:00:00Z</DataWytworzeniaFa>
+    <SystemInfo>test</SystemInfo>
+  </Naglowek>
+  <Podmiot1><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>S</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>a</AdresL1><AdresL2>b</AdresL2></Adres></Podmiot1>
+  <Podmiot2><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>B</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>c</AdresL1><AdresL2>d</AdresL2></Adres></Podmiot2>
+  <Fa><KodWaluty>PLN</KodWaluty><P_1>2026-04-13</P_1><P_2>FV/1</P_2><P_6>2026-04-13</P_6><P_15>100.00</P_15>
+  <FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>x</P_7><P_8B>1</P_8B><P_9A>100.00</P_9A><P_11>100.00</P_11><P_12>23</P_12></FaWiersz>
+  <Platnosc><TerminPlatnosci><Termin>2026-04-27</Termin></TerminPlatnosci><FormaPlatnosci>6</FormaPlatnosci></Platnosc></Fa>
+</Faktura>"#;
+
         let err = xml_to_invoice(
             &InvoiceXml::new(xml.to_string()),
             Direction::Incoming,
@@ -452,7 +481,34 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(err, XmlError::UnsupportedSchemaVersion(v) if v == "2-0E"));
+        assert!(matches!(err, XmlError::MissingElement(ref e) if e.contains("wersjaSchemy")));
+    }
+
+    #[test]
+    fn accepts_schema_version_1_1e() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">
+  <Naglowek>
+    <KodFormularza kodSystemowy="FA (3)" wersjaSchemy="1-1E">FA</KodFormularza>
+    <WariantFormularza>3</WariantFormularza>
+    <DataWytworzeniaFa>2026-04-13T00:00:00Z</DataWytworzeniaFa>
+    <SystemInfo>test</SystemInfo>
+  </Naglowek>
+  <Podmiot1><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>Seller</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>ul. A 1</AdresL1><AdresL2>00-001 W</AdresL2></Adres></Podmiot1>
+  <Podmiot2><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>Buyer</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>ul. B 2</AdresL1><AdresL2>00-002 K</AdresL2></Adres></Podmiot2>
+  <Fa><KodWaluty>PLN</KodWaluty><P_1>2026-04-13</P_1><P_2>FV/1</P_2><P_6>2026-04-13</P_6><P_15>100.00</P_15>
+  <FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>Uslugi</P_7><P_8B>1</P_8B><P_9A>100.00</P_9A><P_11>100.00</P_11><P_12>23</P_12></FaWiersz>
+  <Platnosc><TerminPlatnosci><Termin>2026-04-27</Termin></TerminPlatnosci><FormaPlatnosci>6</FormaPlatnosci></Platnosc></Fa>
+</Faktura>"#;
+
+        let invoice = xml_to_invoice(
+            &InvoiceXml::new(xml.to_string()),
+            Direction::Incoming,
+            &KSeFNumber::new("KSeF-1-1E".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(invoice.invoice_number, "FV/1");
     }
 
     // --- Missing elements ---
