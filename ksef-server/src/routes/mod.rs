@@ -44,6 +44,10 @@ pub fn router() -> Router<AppState> {
             "/accounts/{nip}/invoices/fetch",
             get(fetch::fetch_form).post(fetch::fetch_execute),
         )
+        .route(
+            "/accounts/{nip}/invoices/fetch/status",
+            get(fetch::fetch_status),
+        )
         .route("/accounts/{nip}/invoices/{id}", get(invoices::detail))
         .route(
             "/accounts/{nip}/invoices/{id}/submit",

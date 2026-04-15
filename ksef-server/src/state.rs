@@ -19,6 +19,21 @@ use ksef_core::services::token_mgmt_service::TokenMgmtService;
 /// AES key + IV pair for export decryption.
 pub type ExportKeyStore = Arc<Mutex<HashMap<String, (Vec<u8>, Vec<u8>)>>>;
 
+/// Status of a background fetch job.
+#[derive(Clone)]
+pub enum FetchJobStatus {
+    Running,
+    Done {
+        inserted: u32,
+        updated: u32,
+        errors: Vec<String>,
+    },
+    Failed(String),
+}
+
+/// In-memory store for background fetch jobs, keyed by NIP.
+pub type FetchJobStore = Arc<Mutex<HashMap<String, FetchJobStatus>>>;
+
 /// Shared application state injected into Axum handlers.
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -39,4 +54,6 @@ pub struct AppState {
     pub qr_service: Arc<QRService>,
     /// Temporary store for export encryption keys keyed by reference number.
     pub export_keys: ExportKeyStore,
+    /// Background fetch job statuses keyed by NIP.
+    pub fetch_jobs: FetchJobStore,
 }

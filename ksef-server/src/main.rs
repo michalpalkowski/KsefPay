@@ -170,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
         user_repo: db.user_repo.clone(),
         nip_account_repo: db.nip_account_repo.clone(),
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        fetch_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         company_lookup_service,
         invoice_sequence: db.invoice_sequence.clone(),
         invoice_service,
