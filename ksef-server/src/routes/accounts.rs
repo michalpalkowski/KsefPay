@@ -4,12 +4,16 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::Utc;
 use serde::Deserialize;
+use std::time::Duration;
 use tower_sessions::Session;
 
 use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
-use ksef_core::infra::ksef::TestDataClient;
+use ksef_core::domain::session::{InvoiceQuery, SubjectType};
+use ksef_core::infra::ksef::testdata::TestSubjectType;
+use ksef_core::infra::ksef::{KSeFApiClient, TestDataClient};
+use ksef_core::ports::ksef_client::KSeFClient;
 
 use crate::csrf::ensure_csrf_token;
 use crate::extractors::{AuthUser, CsrfForm};
@@ -66,6 +70,75 @@ fn render_with_status<T: Template>(status: StatusCode, tmpl: T) -> Response {
 pub struct AddAccountFormData {
     pub nip: String,
     pub display_name: String,
+}
+
+const BOOTSTRAP_MAX_ATTEMPTS: u32 = 3;
+const BOOTSTRAP_RETRY_DELAY: Duration = Duration::from_millis(1_500);
+
+async fn verify_invoice_query_access(
+    state: &AppState,
+    access_token: &ksef_core::domain::auth::AccessToken,
+) -> Result<(), String> {
+    let client = KSeFApiClient::new(state.ksef_environment);
+    let today = Utc::now().date_naive();
+    let query = InvoiceQuery {
+        date_from: today,
+        date_to: today,
+        subject_type: SubjectType::Subject1,
+    };
+
+    client
+        .query_invoices(access_token, &query)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("brak dostępu do zapytań faktur KSeF (InvoiceRead): {e}"))
+}
+
+async fn bootstrap_sandbox_subject(
+    state: &AppState,
+    nip: &Nip,
+    ensure_subject_exists: bool,
+) -> Result<(), String> {
+    if ensure_subject_exists {
+        let client = TestDataClient::new(state.ksef_environment);
+        let subject_result = client
+            .create_subject(
+                nip,
+                &format!("ksef-paymoney test subject NIP {nip}"),
+                TestSubjectType::EnforcementAuthority,
+            )
+            .await
+            .map_err(|e| format!("rejestracja podmiotu testowego nie powiodła się: {e}"))?;
+        tracing::info!(nip = %nip, ?subject_result, "sandbox subject registration result");
+    }
+
+    let token_pair = state
+        .session_service
+        .ensure_token(nip)
+        .await
+        .map_err(|e| format!("nie udało się uwierzytelnić NIP w KSeF: {e}"))?;
+
+    for attempt in 1..=BOOTSTRAP_MAX_ATTEMPTS {
+        match verify_invoice_query_access(state, &token_pair.access_token).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                tracing::warn!(
+                    nip = %nip,
+                    attempt,
+                    max_attempts = BOOTSTRAP_MAX_ATTEMPTS,
+                    error = %err,
+                    "sandbox invoice access check failed"
+                );
+                if attempt < BOOTSTRAP_MAX_ATTEMPTS {
+                    tokio::time::sleep(BOOTSTRAP_RETRY_DELAY).await;
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    Err("nie udało się potwierdzić dostępu do zapytań faktur KSeF".to_string())
 }
 
 // --- Handlers ---
@@ -149,8 +222,47 @@ pub async fn add(
 
     // Check if NIP account already exists
     let account = match state.nip_account_repo.find_by_nip(&nip).await {
-        Ok(Some(existing)) => existing,
+        Ok(Some(existing)) => {
+            if state.ksef_environment != KSeFEnvironment::Production
+                && let Err(e) = bootstrap_sandbox_subject(&state, &existing.nip, false).await
+            {
+                return render_with_status(
+                    StatusCode::BAD_GATEWAY,
+                    AccountAddTemplate {
+                        active: "/accounts",
+                        nip_prefix: None,
+                        user_email: auth.email,
+                        error: Some(format!(
+                            "Konto NIP istnieje, ale nie ma wymaganych uprawnień KSeF sandbox: {e}"
+                        )),
+                        nip: form_nip,
+                        display_name: form_display_name,
+                        csrf_token,
+                    },
+                );
+            }
+            existing
+        }
         Ok(None) => {
+            if state.ksef_environment != KSeFEnvironment::Production
+                && let Err(e) = bootstrap_sandbox_subject(&state, &nip, true).await
+            {
+                return render_with_status(
+                    StatusCode::BAD_GATEWAY,
+                    AccountAddTemplate {
+                        active: "/accounts",
+                        nip_prefix: None,
+                        user_email: auth.email,
+                        error: Some(format!(
+                            "Nie udało się skonfigurować konta w KSeF sandbox: {e}"
+                        )),
+                        nip: form_nip,
+                        display_name: form_display_name,
+                        csrf_token,
+                    },
+                );
+            }
+
             // Create new NIP account
             let now = Utc::now();
             let account = NipAccount {
@@ -196,27 +308,6 @@ pub async fn add(
             );
         }
     };
-
-    // On test/demo: register NIP on KSeF sandbox (idempotent, best-effort)
-    if state.ksef_environment != KSeFEnvironment::Production {
-        let client = TestDataClient::new(state.ksef_environment);
-        match client.setup_test_subject(&account.nip).await {
-            Ok((subject, perms)) => {
-                tracing::info!(
-                    nip = %account.nip,
-                    ?subject,
-                    ?perms,
-                    "registered NIP on KSeF sandbox"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    nip = %account.nip,
-                    "sandbox registration failed (non-fatal): {e}"
-                );
-            }
-        }
-    }
 
     // Grant access to the current user
     if let Err(e) = state

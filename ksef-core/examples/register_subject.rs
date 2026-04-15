@@ -19,12 +19,11 @@ async fn main() {
 
     println!("Registering subject NIP {nip} on KSeF test sandbox...");
 
-    let (subject, perms) = client.setup_test_subject(&nip).await.unwrap_or_else(|e| {
+    let subject = client.setup_test_subject(&nip).await.unwrap_or_else(|e| {
         eprintln!("Failed: {e}");
         std::process::exit(1);
     });
 
     println!("Subject: {subject:?}");
-    println!("Permissions: {perms:?}");
     println!("Done. You can now use KSEF_NIP={nip} in .env");
 }

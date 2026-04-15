@@ -69,6 +69,12 @@ impl PermissionChangeRequest {
                 value: "empty".to_string(),
             });
         }
+        if self.context_nip == self.authorized_nip {
+            return Err(DomainError::InvalidParse {
+                type_name: "PermissionChangeRequest.identifier_relation",
+                value: "context_nip must differ from authorized_nip".to_string(),
+            });
+        }
         Ok(())
     }
 }
@@ -143,10 +149,28 @@ mod tests {
     fn change_request_validate_accepts_non_empty_permissions() {
         let request = PermissionChangeRequest {
             context_nip: test_nip(),
-            authorized_nip: test_nip(),
+            authorized_nip: Nip::parse("9990000008").unwrap(),
             permissions: vec![PermissionType::InvoiceRead],
         };
 
         assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn change_request_validate_rejects_self_relation() {
+        let nip = test_nip();
+        let request = PermissionChangeRequest {
+            context_nip: nip.clone(),
+            authorized_nip: nip,
+            permissions: vec![PermissionType::InvoiceRead],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(DomainError::InvalidParse {
+                type_name: "PermissionChangeRequest.identifier_relation",
+                ..
+            })
+        ));
     }
 }
