@@ -11,6 +11,7 @@ mod fetch;
 mod health;
 mod invoices;
 mod permissions;
+mod profile;
 mod sessions;
 mod tokens;
 
@@ -25,6 +26,8 @@ pub fn router() -> Router<AppState> {
         .route("/health", get(health::health))
         // Authenticated routes
         .route("/", get(|| async { Redirect::to("/accounts") }))
+        .route("/profile", get(profile::profile_page))
+        .route("/profile/password", post(profile::change_password))
         .route("/accounts", get(accounts::list))
         .route("/accounts/add", get(accounts::add_form).post(accounts::add))
         // NIP-scoped routes (uses NipContext extractor)

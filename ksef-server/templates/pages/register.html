@@ -7,7 +7,7 @@
 {% block navbar %}{% endblock %}
 
 {% block content %}
-<div class="page-card">
+<div class="page-card auth-card">
   <div class="page-header">
     <h1>Rejestracja</h1>
     <p class="page-copy">Utworz konto w KSeF Pay</p>
@@ -17,25 +17,31 @@
   <div class="alert alert-error">{{ msg }}</div>
   {% endif %}
 
-  <form method="post" action="/register">
-    <div class="form-row">
+  <form method="post" action="/register" class="auth-form">
+    <div class="form-group">
       <label for="email">Email</label>
-      <input type="email" name="email" id="email" value="{{ email }}" placeholder="twoj@email.pl" required autofocus />
+      <input type="email" name="email" id="email" value="{{ email }}"
+             placeholder="twoj@email.pl" required autofocus
+             autocomplete="email" />
     </div>
-    <div class="form-row">
+    <div class="form-group">
       <label for="password">Haslo</label>
-      <input type="password" name="password" id="password" minlength="8" required />
+      <input type="password" name="password" id="password" minlength="8" required
+             autocomplete="new-password"
+             placeholder="Min. 8 znakow, duza litera, cyfra, znak specjalny" />
+      <small class="form-hint">Minimum 8 znakow, duza litera, cyfra i znak specjalny</small>
     </div>
-    <div class="form-row">
+    <div class="form-group">
       <label for="password_confirm">Powtorz haslo</label>
-      <input type="password" name="password_confirm" id="password_confirm" minlength="8" required />
+      <input type="password" name="password_confirm" id="password_confirm" minlength="8" required
+             autocomplete="new-password" />
     </div>
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Zarejestruj sie</button>
+      <button type="submit" class="btn btn-primary" style="width: 100%;">Zarejestruj sie</button>
     </div>
   </form>
 
-  <p class="page-copy" style="margin-top: 1rem;">
+  <p class="page-copy" style="margin-top: 1rem; text-align: center;">
     Masz juz konto? <a href="/login">Zaloguj sie</a>
   </p>
 </div>

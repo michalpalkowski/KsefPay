@@ -14,4 +14,7 @@ pub trait UserRepository: Send + Sync {
 
     /// Find user by email. Returns `None` if not found (not an error — used for login).
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError>;
+
+    /// Update user's password hash. Returns `NotFound` if user missing.
+    async fn update_password(&self, user: &User) -> Result<(), RepositoryError>;
 }

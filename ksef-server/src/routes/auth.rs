@@ -68,6 +68,44 @@ pub struct RegisterFormData {
     pub password_confirm: String,
 }
 
+// --- Validation ---
+
+fn is_valid_email(email: &str) -> bool {
+    // Basic structural check: something@something.something
+    // No external regex crate needed — just enforce minimum structure.
+    let parts: Vec<&str> = email.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let (local, domain) = (parts[0], parts[1]);
+    if local.is_empty() || domain.is_empty() {
+        return false;
+    }
+    // Domain must have at least one dot and no consecutive dots
+    if !domain.contains('.') || domain.contains("..") {
+        return false;
+    }
+    // Domain must not start/end with dot or hyphen
+    let last_part = domain.rsplit('.').next().unwrap_or("");
+    last_part.len() >= 2 && last_part.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+pub fn validate_password_strength(password: &str) -> Result<(), String> {
+    if password.len() < 8 {
+        return Err("Haslo musi miec co najmniej 8 znakow".to_string());
+    }
+    if !password.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err("Haslo musi zawierac co najmniej jedna duza litere".to_string());
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err("Haslo musi zawierac co najmniej jedna cyfre".to_string());
+    }
+    if !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        return Err("Haslo musi zawierac co najmniej jeden znak specjalny (np. !@#$%)".to_string());
+    }
+    Ok(())
+}
+
 // --- Handlers ---
 
 pub async fn login_page(session: Session) -> Response {
@@ -188,7 +226,7 @@ pub async fn register(
         );
     }
 
-    if !email.contains('@') {
+    if !is_valid_email(&email) {
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
@@ -198,11 +236,11 @@ pub async fn register(
         );
     }
 
-    if form.password.len() < 8 {
+    if let Err(msg) = validate_password_strength(&form.password) {
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Haslo musi miec co najmniej 8 znakow".to_string()),
+                error: Some(msg),
                 email,
             },
         );

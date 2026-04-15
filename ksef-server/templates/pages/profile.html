@@ -1,0 +1,41 @@
+{% extends "layouts/app.html" %}
+{% import "macros/alerts.html" as alerts %}
+
+{% block head %}
+<title>Profil - KSeF Pay</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card auth-card">
+  <div class="page-header">
+    <h1>Profil</h1>
+    <p class="page-copy">{{ user_email }}</p>
+  </div>
+
+  {% call alerts::alerts(error, success) %}{% endcall %}
+
+  <h2>Zmien haslo</h2>
+  <form method="post" action="/profile/password" class="auth-form">
+    <div class="form-group">
+      <label for="current_password">Obecne haslo</label>
+      <input type="password" name="current_password" id="current_password" required
+             autocomplete="current-password" />
+    </div>
+    <div class="form-group">
+      <label for="new_password">Nowe haslo</label>
+      <input type="password" name="new_password" id="new_password" minlength="8" required
+             autocomplete="new-password"
+             placeholder="Min. 8 znakow, duza litera, cyfra, znak specjalny" />
+      <small class="form-hint">Minimum 8 znakow, duza litera, cyfra i znak specjalny</small>
+    </div>
+    <div class="form-group">
+      <label for="new_password_confirm">Powtorz nowe haslo</label>
+      <input type="password" name="new_password_confirm" id="new_password_confirm" minlength="8" required
+             autocomplete="new-password" />
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" style="width: 100%;">Zmien haslo</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

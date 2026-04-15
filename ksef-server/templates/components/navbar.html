@@ -13,6 +13,6 @@
   <a href="/accounts/{{ nip_val }}/tokens" class="{% if active == "/tokens" %}active{% endif %}">Tokeny</a>
   {% endif %}
   <div class="nav-sep"></div>
-  <span class="nav-user">{{ user_email }}</span>
+  <a href="/profile" class="nav-user {% if active == "/profile" %}active{% endif %}">{{ user_email }}</a>
   <a href="/logout">Wyloguj</a>
 </nav>

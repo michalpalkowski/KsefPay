@@ -77,3 +77,25 @@ pub async fn find_by_email<'e>(
         .await?;
     Ok(row.map(UserRow::into_domain))
 }
+
+pub async fn update_password<'e>(
+    exec: impl PgExecutor<'e>,
+    user: &User,
+) -> Result<(), RepositoryError> {
+    let result = sqlx::query(
+        r"UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+    )
+    .bind(&user.password_hash)
+    .bind(user.updated_at)
+    .bind(user.id.as_uuid())
+    .execute(exec)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(RepositoryError::NotFound {
+            entity: "User",
+            id: user.id.to_string(),
+        });
+    }
+    Ok(())
+}

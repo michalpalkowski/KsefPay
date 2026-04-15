@@ -363,6 +363,10 @@ impl UserRepository for Db {
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError> {
         queries::user::find_by_email(&self.pool, email).await
     }
+
+    async fn update_password(&self, user: &User) -> Result<(), RepositoryError> {
+        queries::user::update_password(&self.pool, user).await
+    }
 }
 
 #[async_trait]
@@ -383,6 +387,12 @@ impl UserRepository for Tx {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::user::find_by_email(&mut **tx, email).await
+    }
+
+    async fn update_password(&self, user: &User) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::user::update_password(&mut **tx, user).await
     }
 }
 

@@ -7,7 +7,7 @@
 {% block navbar %}{% endblock %}
 
 {% block content %}
-<div class="page-card">
+<div class="page-card auth-card">
   <div class="page-header">
     <h1>Logowanie</h1>
     <p class="page-copy">Zaloguj sie do KSeF Pay</p>
@@ -17,21 +17,24 @@
   <div class="alert alert-error">{{ msg }}</div>
   {% endif %}
 
-  <form method="post" action="/login">
-    <div class="form-row">
+  <form method="post" action="/login" class="auth-form">
+    <div class="form-group">
       <label for="email">Email</label>
-      <input type="email" name="email" id="email" value="{{ email }}" placeholder="twoj@email.pl" required autofocus />
+      <input type="email" name="email" id="email" value="{{ email }}"
+             placeholder="twoj@email.pl" required autofocus
+             autocomplete="email" />
     </div>
-    <div class="form-row">
+    <div class="form-group">
       <label for="password">Haslo</label>
-      <input type="password" name="password" id="password" required />
+      <input type="password" name="password" id="password" required
+             autocomplete="current-password" />
     </div>
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Zaloguj sie</button>
+      <button type="submit" class="btn btn-primary" style="width: 100%;">Zaloguj sie</button>
     </div>
   </form>
 
-  <p class="page-copy" style="margin-top: 1rem;">
+  <p class="page-copy" style="margin-top: 1rem; text-align: center;">
     Nie masz konta? <a href="/register">Zarejestruj sie</a>
   </p>
 </div>
