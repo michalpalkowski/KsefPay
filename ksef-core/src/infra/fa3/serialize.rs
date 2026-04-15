@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use crate::domain::invoice::{Invoice, Money};
+use crate::domain::invoice::{Invoice, InvoiceType, Money};
 use crate::domain::xml::InvoiceXml;
 use crate::error::XmlError;
 
@@ -11,6 +11,7 @@ const SYSTEM_INFO: &str = "ksef-paymoney/0.1.0";
 
 /// Serialize a domain `Invoice` into FA(3) compliant XML.
 pub fn invoice_to_xml(invoice: &Invoice) -> Result<InvoiceXml, XmlError> {
+    let rodzaj_faktury = map_invoice_type_to_fa3(invoice.invoice_type)?;
     let mut xml = String::with_capacity(4096);
 
     writeln!(xml, r#"<?xml version="1.0" encoding="UTF-8"?>"#).unwrap();
@@ -23,7 +24,7 @@ pub fn invoice_to_xml(invoice: &Invoice) -> Result<InvoiceXml, XmlError> {
     write_naglowek(&mut xml, invoice);
     write_podmiot1(&mut xml, invoice);
     write_podmiot2(&mut xml, invoice);
-    write_fa(&mut xml, invoice);
+    write_fa(&mut xml, invoice, rodzaj_faktury);
 
     writeln!(xml, "</Faktura>").unwrap();
 
@@ -104,10 +105,14 @@ fn write_podmiot2(xml: &mut String, invoice: &Invoice) {
     )
     .unwrap();
     writeln!(xml, "    </Adres>").unwrap();
+    // Required flags in FA(3) schema v1-0:
+    // 2 = "nie dotyczy" (invoice is not about JST/GV subunit handoff).
+    writeln!(xml, "    <JST>2</JST>").unwrap();
+    writeln!(xml, "    <GV>2</GV>").unwrap();
     writeln!(xml, "  </Podmiot2>").unwrap();
 }
 
-fn write_fa(xml: &mut String, invoice: &Invoice) {
+fn write_fa(xml: &mut String, invoice: &Invoice, rodzaj_faktury: &str) {
     writeln!(xml, "  <Fa>").unwrap();
     writeln!(xml, "    <KodWaluty>{}</KodWaluty>", invoice.currency).unwrap();
     writeln!(xml, "    <P_1>{}</P_1>", invoice.issue_date).unwrap();
@@ -129,6 +134,8 @@ fn write_fa(xml: &mut String, invoice: &Invoice) {
         format_money(invoice.total_gross)
     )
     .unwrap();
+    write_adnotacje(xml);
+    writeln!(xml, "    <RodzajFaktury>{rodzaj_faktury}</RodzajFaktury>").unwrap();
 
     for item in &invoice.line_items {
         writeln!(xml, "    <FaWiersz>").unwrap();
@@ -149,6 +156,40 @@ fn write_fa(xml: &mut String, invoice: &Invoice) {
     write_platnosc(xml, invoice);
 
     writeln!(xml, "  </Fa>").unwrap();
+}
+
+fn write_adnotacje(xml: &mut String) {
+    writeln!(xml, "    <Adnotacje>").unwrap();
+    writeln!(xml, "      <P_16>2</P_16>").unwrap();
+    writeln!(xml, "      <P_17>2</P_17>").unwrap();
+    writeln!(xml, "      <P_18>2</P_18>").unwrap();
+    writeln!(xml, "      <P_18A>2</P_18A>").unwrap();
+    writeln!(xml, "      <Zwolnienie>").unwrap();
+    writeln!(xml, "        <P_19N>1</P_19N>").unwrap();
+    writeln!(xml, "      </Zwolnienie>").unwrap();
+    writeln!(xml, "      <NoweSrodkiTransportu>").unwrap();
+    writeln!(xml, "        <P_22N>1</P_22N>").unwrap();
+    writeln!(xml, "      </NoweSrodkiTransportu>").unwrap();
+    writeln!(xml, "      <P_23>2</P_23>").unwrap();
+    writeln!(xml, "      <PMarzy>").unwrap();
+    writeln!(xml, "        <P_PMarzyN>1</P_PMarzyN>").unwrap();
+    writeln!(xml, "      </PMarzy>").unwrap();
+    writeln!(xml, "    </Adnotacje>").unwrap();
+}
+
+fn map_invoice_type_to_fa3(invoice_type: InvoiceType) -> Result<&'static str, XmlError> {
+    match invoice_type {
+        InvoiceType::Vat => Ok("VAT"),
+        InvoiceType::Kor => Ok("KOR"),
+        InvoiceType::Zal => Ok("ZAL"),
+        InvoiceType::Roz => Ok("ROZ"),
+        InvoiceType::Upr => Ok("UPR"),
+        InvoiceType::KorZal => Ok("KOR_ZAL"),
+        InvoiceType::KorRoz => Ok("KOR_ROZ"),
+        unsupported => Err(XmlError::ValidationFailed(format!(
+            "unsupported invoice type for FA(3) serializer: {unsupported}"
+        ))),
+    }
 }
 
 fn write_vat_summary(xml: &mut String, invoice: &Invoice) {
@@ -233,6 +274,43 @@ fn escape_xml(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_support::fixtures::sample_invoice;
+    use roxmltree::Document;
+
+    fn validate_fa_sequence_contract(xml: &str) -> Result<(), String> {
+        let doc = Document::parse(xml).map_err(|e| format!("invalid XML: {e}"))?;
+        let fa = doc
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "Fa")
+            .ok_or_else(|| "missing Fa element".to_string())?;
+
+        let mut p15_idx = None;
+        let mut adnotacje_idx = None;
+        let mut rodzaj_idx = None;
+        let mut first_line_idx = None;
+
+        for (idx, node) in fa.children().filter(|n| n.is_element()).enumerate() {
+            match node.tag_name().name() {
+                "P_15" if p15_idx.is_none() => p15_idx = Some(idx),
+                "Adnotacje" if adnotacje_idx.is_none() => adnotacje_idx = Some(idx),
+                "RodzajFaktury" if rodzaj_idx.is_none() => rodzaj_idx = Some(idx),
+                "FaWiersz" if first_line_idx.is_none() => first_line_idx = Some(idx),
+                _ => {}
+            }
+        }
+
+        let p15 = p15_idx.ok_or_else(|| "missing P_15".to_string())?;
+        let adnotacje = adnotacje_idx.ok_or_else(|| "missing Adnotacje".to_string())?;
+        let rodzaj = rodzaj_idx.ok_or_else(|| "missing RodzajFaktury".to_string())?;
+        let first_line = first_line_idx.ok_or_else(|| "missing FaWiersz".to_string())?;
+
+        if !(p15 < adnotacje && adnotacje < rodzaj && rodzaj < first_line) {
+            return Err(format!(
+                "invalid Fa sequence: expected P_15 < Adnotacje < RodzajFaktury < FaWiersz, got indexes P_15={p15}, Adnotacje={adnotacje}, RodzajFaktury={rodzaj}, FaWiersz={first_line}"
+            ));
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn generates_valid_fa3_xml_structure() {
@@ -257,6 +335,8 @@ mod tests {
 
         // Podmiot2 (buyer)
         assert!(s.contains("<Nazwa>Test Buyer S.A.</Nazwa>"));
+        assert!(s.contains("<JST>2</JST>"));
+        assert!(s.contains("<GV>2</GV>"));
 
         // Fa core
         assert!(s.contains("<KodWaluty>PLN</KodWaluty>"));
@@ -309,6 +389,104 @@ mod tests {
         let s = xml.as_str();
 
         assert!(s.contains("<P_15>29520.00</P_15>"));
+    }
+
+    #[test]
+    fn writes_required_adnotacje_and_rodzaj_faktury_before_line_items() {
+        let invoice = sample_invoice();
+        let xml = invoice_to_xml(&invoice).unwrap();
+        let s = xml.as_str();
+
+        assert!(s.contains("<Adnotacje>"));
+        assert!(s.contains("<P_16>2</P_16>"));
+        assert!(s.contains("<P_17>2</P_17>"));
+        assert!(s.contains("<P_18>2</P_18>"));
+        assert!(s.contains("<P_18A>2</P_18A>"));
+        assert!(s.contains("<P_19N>1</P_19N>"));
+        assert!(s.contains("<P_22N>1</P_22N>"));
+        assert!(s.contains("<P_23>2</P_23>"));
+        assert!(s.contains("<P_PMarzyN>1</P_PMarzyN>"));
+        assert!(s.contains("<RodzajFaktury>VAT</RodzajFaktury>"));
+
+        let p15_idx = s.find("<P_15>").expect("missing P_15");
+        let adnotacje_idx = s.find("<Adnotacje>").expect("missing Adnotacje");
+        let rodzaj_idx = s.find("<RodzajFaktury>").expect("missing RodzajFaktury");
+        let line_idx = s.find("<FaWiersz>").expect("missing FaWiersz");
+
+        assert!(p15_idx < adnotacje_idx);
+        assert!(adnotacje_idx < rodzaj_idx);
+        assert!(rodzaj_idx < line_idx);
+        validate_fa_sequence_contract(s).unwrap();
+    }
+
+    #[test]
+    fn maps_supported_invoice_types_to_rodzaj_faktury() {
+        let cases = [
+            (InvoiceType::Vat, "VAT"),
+            (InvoiceType::Kor, "KOR"),
+            (InvoiceType::Zal, "ZAL"),
+            (InvoiceType::Roz, "ROZ"),
+            (InvoiceType::Upr, "UPR"),
+            (InvoiceType::KorZal, "KOR_ZAL"),
+            (InvoiceType::KorRoz, "KOR_ROZ"),
+        ];
+
+        for (invoice_type, expected) in cases {
+            let mut invoice = sample_invoice();
+            invoice.invoice_type = invoice_type;
+            let xml = invoice_to_xml(&invoice).unwrap();
+            assert!(
+                xml.as_str()
+                    .contains(&format!("<RodzajFaktury>{expected}</RodzajFaktury>"))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invoice_types_not_supported_by_fa3_rodzaj_faktury() {
+        let mut invoice = sample_invoice();
+        invoice.invoice_type = InvoiceType::VatPef;
+
+        let err = invoice_to_xml(&invoice).unwrap_err();
+        assert!(matches!(err, XmlError::ValidationFailed(_)));
+    }
+
+    #[test]
+    fn fa_sequence_contract_rejects_missing_adnotacje() {
+        let invoice = sample_invoice();
+        let xml = invoice_to_xml(&invoice).unwrap();
+        let broken = xml
+            .as_str()
+            .replace("<Adnotacje>", "")
+            .replace("</Adnotacje>", "");
+
+        let err = validate_fa_sequence_contract(&broken).unwrap_err();
+        assert!(err.contains("missing Adnotacje"));
+    }
+
+    #[test]
+    fn fa_sequence_contract_rejects_missing_rodzaj_faktury() {
+        let invoice = sample_invoice();
+        let xml = invoice_to_xml(&invoice).unwrap();
+        let broken = xml
+            .as_str()
+            .replace("<RodzajFaktury>", "")
+            .replace("</RodzajFaktury>", "");
+
+        let err = validate_fa_sequence_contract(&broken).unwrap_err();
+        assert!(err.contains("missing RodzajFaktury"));
+    }
+
+    #[test]
+    fn fa_sequence_contract_rejects_fawiersz_before_adnotacje() {
+        let invoice = sample_invoice();
+        let xml = invoice_to_xml(&invoice).unwrap();
+        let injected_early_line =
+            r#"<FaWiersz><NrWierszaFa>999</NrWierszaFa><P_7>X</P_7></FaWiersz><Adnotacje>"#;
+        let broken = xml.as_str().replacen("<Adnotacje>", injected_early_line, 1);
+
+        let err = validate_fa_sequence_contract(&broken).unwrap_err();
+        assert!(err.contains("invalid Fa sequence"));
     }
 
     #[test]

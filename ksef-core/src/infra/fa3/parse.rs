@@ -591,6 +591,21 @@ mod tests {
     }
 
     #[test]
+    fn accepts_legacy_vat_rate_22() {
+        let wiersz = r#"<FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>x</P_7><P_8B>1</P_8B><P_9A>100.00</P_9A><P_11>100.00</P_11><P_12>22</P_12></FaWiersz>"#;
+        let xml = build_minimal_xml(wiersz, "122.00");
+        let invoice = xml_to_invoice(
+            &InvoiceXml::new(xml),
+            Direction::Incoming,
+            &KSeFNumber::new("KSeF-X".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(invoice.line_items[0].vat_rate, VatRate::Rate22);
+        assert_eq!(invoice.line_items[0].vat_amount, Money::from_grosze(2_200));
+    }
+
+    #[test]
     fn accepts_qualified_reverse_charge_vat_rate() {
         let wiersz = r#"<FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>x</P_7><P_8B>1</P_8B><P_9A>100.00</P_9A><P_11>100.00</P_11><P_12>np I</P_12></FaWiersz>"#;
         let xml = build_minimal_xml(wiersz, "100.00");
