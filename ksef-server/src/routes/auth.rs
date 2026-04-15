@@ -92,16 +92,16 @@ fn is_valid_email(email: &str) -> bool {
 
 pub fn validate_password_strength(password: &str) -> Result<(), String> {
     if password.len() < 8 {
-        return Err("Haslo musi miec co najmniej 8 znakow".to_string());
+        return Err("Hasło musi mieć co najmniej 8 znaków".to_string());
     }
     if !password.chars().any(|c| c.is_ascii_uppercase()) {
-        return Err("Haslo musi zawierac co najmniej jedna duza litere".to_string());
+        return Err("Hasło musi zawierać co najmniej jedną dużą literę".to_string());
     }
     if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Err("Haslo musi zawierac co najmniej jedna cyfre".to_string());
+        return Err("Hasło musi zawierać co najmniej jedną cyfrę".to_string());
     }
     if !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
-        return Err("Haslo musi zawierac co najmniej jeden znak specjalny (np. !@#$%)".to_string());
+        return Err("Hasło musi zawierać co najmniej jeden znak specjalny (np. !@#$%)".to_string());
     }
     Ok(())
 }
@@ -129,7 +129,7 @@ pub async fn login(
         return render_with_status(
             StatusCode::BAD_REQUEST,
             LoginTemplate {
-                error: Some("Email i haslo sa wymagane".to_string()),
+                error: Some("Email i hasło są wymagane".to_string()),
                 email,
             },
         );
@@ -141,7 +141,7 @@ pub async fn login(
             return render_with_status(
                 StatusCode::UNAUTHORIZED,
                 LoginTemplate {
-                    error: Some("Nieprawidlowy email lub haslo".to_string()),
+                    error: Some("Nieprawidłowy email lub hasło".to_string()),
                     email,
                 },
             );
@@ -150,7 +150,7 @@ pub async fn login(
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 LoginTemplate {
-                    error: Some(format!("Blad serwera: {e}")),
+                    error: Some(format!("Błąd serwera: {e}")),
                     email,
                 },
             );
@@ -161,7 +161,7 @@ pub async fn login(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             LoginTemplate {
-                error: Some("Blad weryfikacji hasla".to_string()),
+                error: Some("Błąd weryfikacji hasła".to_string()),
                 email,
             },
         );
@@ -174,7 +174,7 @@ pub async fn login(
         return render_with_status(
             StatusCode::UNAUTHORIZED,
             LoginTemplate {
-                error: Some("Nieprawidlowy email lub haslo".to_string()),
+                error: Some("Nieprawidłowy email lub hasło".to_string()),
                 email,
             },
         );
@@ -188,7 +188,7 @@ pub async fn login(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             LoginTemplate {
-                error: Some(format!("Blad sesji: {e}")),
+                error: Some(format!("Błąd sesji: {e}")),
                 email,
             },
         );
@@ -220,7 +220,7 @@ pub async fn register(
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Email i haslo sa wymagane".to_string()),
+                error: Some("Email i hasło są wymagane".to_string()),
                 email,
             },
         );
@@ -230,7 +230,7 @@ pub async fn register(
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Nieprawidlowy adres email".to_string()),
+                error: Some("Nieprawidłowy adres email".to_string()),
                 email,
             },
         );
@@ -250,7 +250,7 @@ pub async fn register(
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Hasla nie sa zgodne".to_string()),
+                error: Some("Hasła nie są zgodne".to_string()),
                 email,
             },
         );
@@ -262,7 +262,7 @@ pub async fn register(
             return render_with_status(
                 StatusCode::CONFLICT,
                 RegisterTemplate {
-                    error: Some("Konto z tym adresem email juz istnieje".to_string()),
+                    error: Some("Konto z tym adresem email już istnieje".to_string()),
                     email,
                 },
             );
@@ -272,7 +272,7 @@ pub async fn register(
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 RegisterTemplate {
-                    error: Some(format!("Blad serwera: {e}")),
+                    error: Some(format!("Błąd serwera: {e}")),
                     email,
                 },
             );
@@ -287,7 +287,7 @@ pub async fn register(
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 RegisterTemplate {
-                    error: Some(format!("Blad hashowania hasla: {e}")),
+                    error: Some(format!("Błąd hashowania hasła: {e}")),
                     email,
                 },
             );
@@ -307,7 +307,7 @@ pub async fn register(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             RegisterTemplate {
-                error: Some(format!("Nie udalo sie utworzyc konta: {e}")),
+                error: Some(format!("Nie udało się utworzyć konta: {e}")),
                 email,
             },
         );
@@ -318,7 +318,7 @@ pub async fn register(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             RegisterTemplate {
-                error: Some(format!("Blad sesji: {e}")),
+                error: Some(format!("Błąd sesji: {e}")),
                 email,
             },
         );

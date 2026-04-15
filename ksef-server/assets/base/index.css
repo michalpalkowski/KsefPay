@@ -186,10 +186,7 @@ h3 {
   letter-spacing: 0.04em;
 }
 
-.stat-draft .stat-value { color: #6b7280; }
-.stat-queued .stat-value { color: #d97706; }
-.stat-accepted .stat-value { color: #059669; }
-.stat-failed .stat-value { color: #dc2626; }
+.stat-value { color: #1e293b; }
 
 .dashboard-actions { display: flex; gap: 0.75rem; }
 

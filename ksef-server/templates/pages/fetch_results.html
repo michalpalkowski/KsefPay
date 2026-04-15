@@ -11,7 +11,7 @@
   </div>
 
   {% if errors.is_empty() %}
-  <div class="alert alert-success">Wszystkie faktury zostaly pobrane bez bledow.</div>
+  <div class="alert alert-success">Wszystkie faktury zostaly pobrane bez błędów.</div>
   {% endif %}
 
   <div class="fetch-summary">
@@ -25,19 +25,19 @@
     </div>
     {% if !errors.is_empty() %}
     <div class="summary-item summary-errors">
-      <span class="summary-label">Bledy:</span>
+      <span class="summary-label">Błędy:</span>
       <span class="summary-value">{{ errors.len() }}</span>
     </div>
     {% endif %}
   </div>
 
   {% if !errors.is_empty() %}
-  <h2>Bledy</h2>
+  <h2>Błędy</h2>
   <table class="invoice-table">
     <thead>
       <tr>
         <th>Numer KSeF</th>
-        <th>Blad</th>
+        <th>Błąd</th>
       </tr>
     </thead>
     <tbody>

@@ -65,7 +65,7 @@ fn status_display(status: ksef_core::domain::export::ExportStatus) -> (String, S
             ("Gotowy do pobrania".to_string(), "accepted".to_string())
         }
         ksef_core::domain::export::ExportStatus::Failed => {
-            ("Blad eksportu".to_string(), "failed".to_string())
+            ("Błąd eksportu".to_string(), "failed".to_string())
         }
     }
 }
@@ -127,7 +127,7 @@ pub async fn start_export(
 
     let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
-        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostepu: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostępu: {e}")),
     };
 
     let query = InvoiceQuery {
@@ -139,7 +139,7 @@ pub async fn start_export(
     let job = match state.export_service.start(&token, query).await {
         Ok(j) => j,
         Err(e) => {
-            return form_error(nip_str, user_email, format!("Eksport nie powiodl sie: {e}"));
+            return form_error(nip_str, user_email, format!("Eksport nie powiódł się: {e}"));
         }
     };
 
@@ -214,7 +214,7 @@ pub async fn check_status(
 
     let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
-        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostepu: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostępu: {e}")),
     };
 
     let (def_from, def_to) = default_dates();
@@ -244,7 +244,7 @@ pub async fn check_status(
         Err(e) => form_error(
             nip_str,
             user_email,
-            format!("Sprawdzenie statusu nie powiodlo sie: {e}"),
+            format!("Sprawdzenie statusu nie powiodło się: {e}"),
         ),
     }
 }
@@ -262,7 +262,7 @@ pub async fn download(
         None => {
             return (
                 StatusCode::NOT_FOUND,
-                "Klucz deszyfrowania nie jest dostepny. Rozpocznij nowy eksport.",
+                "Klucz deszyfrowania nie jest dostępny. Rozpocznij nowy eksport.",
             )
                 .into_response();
         }
@@ -273,7 +273,7 @@ pub async fn download(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Brak tokenu dostepu: {e}"),
+                format!("Brak tokenu dostępu: {e}"),
             )
                 .into_response();
         }
@@ -285,7 +285,7 @@ pub async fn download(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Blad statusu eksportu: {e}"),
+                format!("Błąd statusu eksportu: {e}"),
             )
                 .into_response();
         }
@@ -323,7 +323,7 @@ pub async fn download(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Deszyfrowanie nie powiodlo sie: {e}"),
+            format!("Deszyfrowanie nie powiodło się: {e}"),
         )
             .into_response(),
     }

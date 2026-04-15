@@ -76,7 +76,7 @@ pub async fn authenticate(State(state): State<AppState>, nip_ctx: NipContext) ->
                 user_email: nip_ctx.user.email,
                 has_token,
                 has_session,
-                error: Some(format!("Uwierzytelnienie nie powiodlo sie: {e}")),
+                error: Some(format!("Uwierzytelnienie nie powiodło się: {e}")),
                 success: None,
             })
         }
@@ -96,7 +96,7 @@ pub async fn close_session(State(state): State<AppState>, nip_ctx: NipContext) -
                 has_token,
                 has_session,
                 error: None,
-                success: Some("Sesja zamknieta".to_string()),
+                success: Some("Sesja zamknięta".to_string()),
             })
         }
         Err(e) => {
@@ -107,7 +107,7 @@ pub async fn close_session(State(state): State<AppState>, nip_ctx: NipContext) -
                 user_email: nip_ctx.user.email,
                 has_token,
                 has_session,
-                error: Some(format!("Zamkniecie sesji nie powiodlo sie: {e}")),
+                error: Some(format!("Zamknięcie sesji nie powiodło się: {e}")),
                 success: None,
             })
         }

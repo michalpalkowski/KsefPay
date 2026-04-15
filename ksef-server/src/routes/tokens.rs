@@ -69,7 +69,7 @@ pub async fn tokens_page(State(state): State<AppState>, nip_ctx: NipContext) -> 
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostepu: {e}")),
+                Some(format!("Brak tokenu dostępu: {e}")),
                 None,
             );
         }
@@ -93,7 +93,7 @@ pub async fn tokens_page(State(state): State<AppState>, nip_ctx: NipContext) -> 
         Err(e) => empty_page(
             nip_str,
             user_email,
-            Some(format!("Pobieranie tokenow nie powiodlo sie: {e}")),
+            Some(format!("Pobieranie tokenów nie powiodło się: {e}")),
             None,
         ),
     }
@@ -137,7 +137,7 @@ pub async fn generate(
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostepu: {e}")),
+                Some(format!("Brak tokenu dostępu: {e}")),
                 None,
             );
         }
@@ -159,7 +159,7 @@ pub async fn generate(
         Err(e) => empty_page(
             nip_str,
             user_email,
-            Some(format!("Generowanie tokenu nie powiodlo sie: {e}")),
+            Some(format!("Generowanie tokenu nie powiodło się: {e}")),
             None,
         ),
     }
@@ -180,7 +180,7 @@ pub async fn revoke(
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostepu: {e}")),
+                Some(format!("Brak tokenu dostępu: {e}")),
                 None,
             );
         }
@@ -191,7 +191,7 @@ pub async fn revoke(
         Err(e) => empty_page(
             nip_str,
             user_email,
-            Some(format!("Unieaznienie tokenu nie powiodlo sie: {e}")),
+            Some(format!("Unieważnienie tokenu nie powiodło się: {e}")),
             None,
         ),
     }

@@ -78,7 +78,7 @@ pub async fn change_password(
         Err(e) => {
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                page(&auth.email, Some(format!("Blad serwera: {e}")), None),
+                page(&auth.email, Some(format!("Błąd serwera: {e}")), None),
             );
         }
     };
@@ -87,7 +87,7 @@ pub async fn change_password(
     let Ok(parsed_hash) = PasswordHash::new(&user.password_hash) else {
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            page(&auth.email, Some("Blad weryfikacji hasla".to_string()), None),
+            page(&auth.email, Some("Błąd weryfikacji hasła".to_string()), None),
         );
     };
 
@@ -97,7 +97,7 @@ pub async fn change_password(
     {
         return render_with_status(
             StatusCode::BAD_REQUEST,
-            page(&auth.email, Some("Obecne haslo jest nieprawidlowe".to_string()), None),
+            page(&auth.email, Some("Obecne hasło jest nieprawidłowe".to_string()), None),
         );
     }
 
@@ -112,7 +112,7 @@ pub async fn change_password(
     if form.new_password != form.new_password_confirm {
         return render_with_status(
             StatusCode::BAD_REQUEST,
-            page(&auth.email, Some("Nowe hasla nie sa zgodne".to_string()), None),
+            page(&auth.email, Some("Nowe hasła nie są zgodne".to_string()), None),
         );
     }
 
@@ -123,7 +123,7 @@ pub async fn change_password(
         Err(e) => {
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                page(&auth.email, Some(format!("Blad hashowania: {e}")), None),
+                page(&auth.email, Some(format!("Błąd hashowania: {e}")), None),
             );
         }
     };
@@ -135,9 +135,9 @@ pub async fn change_password(
     if let Err(e) = state.user_repo.update_password(&updated_user).await {
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            page(&auth.email, Some(format!("Nie udalo sie zmienic hasla: {e}")), None),
+            page(&auth.email, Some(format!("Nie udało się zmienić hasła: {e}")), None),
         );
     }
 
-    render(page(&auth.email, None, Some("Haslo zostalo zmienione".to_string())))
+    render(page(&auth.email, None, Some("Hasło zostało zmienione".to_string())))
 }

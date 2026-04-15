@@ -74,7 +74,7 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> Response {
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Nie udalo sie pobrac listy kont: {e}"),
+                format!("Nie udało się pobrać listy kont: {e}"),
             )
                 .into_response();
         }
@@ -116,7 +116,7 @@ pub async fn add(
                     active: "/accounts",
                     nip_prefix: None,
                     user_email: auth.email,
-                    error: Some(format!("Nieprawidlowy NIP: {e}")),
+                    error: Some(format!("Nieprawidłowy NIP: {e}")),
                     nip: form_nip,
                     display_name: form_display_name,
                 },
@@ -164,7 +164,7 @@ pub async fn add(
                         active: "/accounts",
                         nip_prefix: None,
                         user_email: auth.email,
-                        error: Some(format!("Nie udalo sie utworzyc konta NIP: {e}")),
+                        error: Some(format!("Nie udało się utworzyć konta NIP: {e}")),
                         nip: form_nip,
                         display_name: form_display_name,
                     },
@@ -179,7 +179,7 @@ pub async fn add(
                     active: "/accounts",
                     nip_prefix: None,
                     user_email: auth.email,
-                    error: Some(format!("Blad serwera: {e}")),
+                    error: Some(format!("Błąd serwera: {e}")),
                     nip: form_nip,
                     display_name: form_display_name,
                 },

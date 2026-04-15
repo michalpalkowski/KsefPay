@@ -97,8 +97,8 @@
         <td>{{ t.created_at.format("%Y-%m-%d %H:%M") }}</td>
         <td>{{ t.expires_at.format("%Y-%m-%d %H:%M") }}</td>
         <td>
-          <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/{{ t.id }}/revoke" style="display:inline" onsubmit="return confirm('Uniewazniony token nie moze byc przywrocony. Kontynuowac?')">
-            <button type="submit" class="btn btn-danger btn-sm">Uniewaznij</button>
+          <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/{{ t.id }}/revoke" style="display:inline" onsubmit="return confirm('Unieważniony token nie może być przywrócony. Kontynuowac?')">
+            <button type="submit" class="btn btn-danger btn-sm">Unieważnij</button>
           </form>
         </td>
       </tr>

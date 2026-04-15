@@ -119,7 +119,7 @@ pub async fn grant(
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostepu: {e}")),
+                Some(format!("Brak tokenu dostępu: {e}")),
                 None,
             );
         }
@@ -136,7 +136,7 @@ pub async fn grant(
         Err(e) => empty_page(
             nip_str,
             user_email,
-            Some(format!("Nadanie uprawnienia nie powiodlo sie: {e}")),
+            Some(format!("Nadanie uprawnienia nie powiodło się: {e}")),
             None,
         ),
     }
@@ -186,7 +186,7 @@ pub async fn revoke(
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostepu: {e}")),
+                Some(format!("Brak tokenu dostępu: {e}")),
                 None,
             );
         }
@@ -208,7 +208,7 @@ pub async fn revoke(
         Err(e) => empty_page(
             nip_str,
             user_email,
-            Some(format!("Odebranie uprawnienia nie powiodlo sie: {e}")),
+            Some(format!("Odebranie uprawnienia nie powiodło się: {e}")),
             None,
         ),
     }
@@ -236,7 +236,7 @@ pub async fn query(
             return empty_page(
                 nip_str,
                 user_email,
-                Some(format!("Brak tokenu dostepu: {e}")),
+                Some(format!("Brak tokenu dostępu: {e}")),
                 None,
             );
         }
@@ -260,7 +260,7 @@ pub async fn query(
         Err(e) => empty_page(
             nip_str,
             user_email,
-            Some(format!("Zapytanie o uprawnienia nie powiodlo sie: {e}")),
+            Some(format!("Zapytanie o uprawnienia nie powiodło się: {e}")),
             None,
         ),
     }

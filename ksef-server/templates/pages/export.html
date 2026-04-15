@@ -33,7 +33,7 @@
     </div>
     {% elif res.is_pending %}
     <p class="page-copy" style="margin-top: 1rem;">
-      KSeF przygotowuje paczke z fakturami. Moze to potrwac kilka minut.
+      KSeF przygotowuje paczke z fakturami. Może to potrwać kilka minut.
     </p>
     <div class="actions" style="margin-top: 0.75rem;">
       <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/export/{{ res.reference }}" class="btn btn-secondary">Sprawdz status</a>
