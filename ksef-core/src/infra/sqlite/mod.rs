@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
 
+use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
@@ -13,6 +14,7 @@ use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
 use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
+use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use crate::ports::invoice_sequence::InvoiceSequenceRepository;
@@ -372,6 +374,21 @@ impl SessionRepository for Tx {
 }
 
 #[async_trait]
+impl AuditLogRepository for Tx {
+    async fn log(&self, entry: &NewAuditLogEntry) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::audit::log(&mut **tx, entry).await
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AuditLogEntry>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::audit::list_recent(&mut **tx, limit).await
+    }
+}
+
+#[async_trait]
 impl UserRepository for Db {
     async fn create(&self, user: &User) -> Result<UserId, RepositoryError> {
         queries::user::create(&self.pool, user).await
@@ -436,6 +453,17 @@ impl CompanyCacheRepository for Db {
     }
     async fn set(&self, info: &CompanyInfo) -> Result<(), RepositoryError> {
         queries::company_cache::set(&self.pool, info).await
+    }
+}
+
+#[async_trait]
+impl AuditLogRepository for Db {
+    async fn log(&self, entry: &NewAuditLogEntry) -> Result<(), RepositoryError> {
+        queries::audit::log(&self.pool, entry).await
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AuditLogEntry>, RepositoryError> {
+        queries::audit::list_recent(&self.pool, limit).await
     }
 }
 

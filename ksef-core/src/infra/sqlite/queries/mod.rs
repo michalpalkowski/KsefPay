@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod company_cache;
 pub(crate) mod datetime;
 pub mod invoice;

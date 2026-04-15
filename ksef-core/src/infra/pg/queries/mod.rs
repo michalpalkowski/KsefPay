@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod company_cache;
 pub mod invoice;
 pub mod invoice_sequence;

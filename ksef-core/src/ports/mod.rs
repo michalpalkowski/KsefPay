@@ -1,10 +1,11 @@
+pub mod audit_log;
 pub mod batch_archive_builder;
 pub mod company_cache;
 pub mod company_lookup;
 pub mod encryption;
-pub mod invoice_sequence;
 pub mod invoice_decryptor;
 pub mod invoice_repository;
+pub mod invoice_sequence;
 pub mod invoice_xml;
 pub mod job_queue;
 pub mod ksef_auth;
