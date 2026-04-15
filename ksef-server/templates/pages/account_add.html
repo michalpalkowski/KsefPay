@@ -16,6 +16,7 @@
   {% endif %}
 
   <form method="post" action="/accounts/add">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       <label for="nip">NIP (10 cyfr)</label>
       <input type="text" name="nip" id="nip" value="{{ nip }}" required pattern="\d{10}" placeholder="1234567890" />

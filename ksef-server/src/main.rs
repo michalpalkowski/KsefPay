@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use tower_http::services::ServeDir;
 use tower_sessions::Expiry;
 use tower_sessions::SessionManagerLayer;
+use tower_sessions::cookie::SameSite;
 use tower_sessions::cookie::time::Duration as CookieDuration;
 use tracing_subscriber::EnvFilter;
 
@@ -17,6 +18,7 @@ use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
 use ksef_core::infra::ksef::KSeFApiClient;
 use ksef_core::infra::qr::generator::QRCodeGenerator;
+use ksef_core::services::audit_service::AuditService;
 use ksef_core::services::batch_service::BatchService;
 use ksef_core::services::export_service::ExportService;
 use ksef_core::services::fetch_service::FetchService;
@@ -28,9 +30,13 @@ use ksef_core::services::session_service::{AuthMethod, SessionService};
 use ksef_core::services::token_mgmt_service::TokenMgmtService;
 use ksef_core::workers::job_worker::JobWorker;
 
+mod audit_log;
+mod auth_rate_limit;
 mod config;
+mod csrf;
 mod db_backend;
 mod extractors;
+mod request_meta;
 mod routes;
 mod state;
 
@@ -65,8 +71,8 @@ fn load_fallback_signer(config: &config::Config) -> anyhow::Result<OpenSslXadesS
         }
         _ => {
             // Generate a placeholder cert — SignerFactory creates per-NIP signers at runtime.
-            let placeholder_nip = ksef_core::domain::nip::Nip::parse("5260250274")
-                .expect("well-known NIP is valid");
+            let placeholder_nip =
+                ksef_core::domain::nip::Nip::parse("5260250274").expect("well-known NIP is valid");
             OpenSslXadesSigner::generate_self_signed_for_nip(&placeholder_nip)
                 .map_err(|e| anyhow::anyhow!("fallback signer generation failed: {e}"))
         }
@@ -137,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
     let permission_service = Arc::new(PermissionService::new(ksef.clone()));
     let token_mgmt_service = Arc::new(TokenMgmtService::new(ksef.clone()));
     let export_service = Arc::new(ExportService::new(ksef.clone(), decryptor));
+    let audit_service = Arc::new(AuditService::new(db.audit_log_repo.clone()));
     let batch_service = Arc::new(BatchService::new(
         ksef.clone(),
         Arc::new(BatchFileBuilder::default()),
@@ -171,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         nip_account_repo: db.nip_account_repo.clone(),
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         fetch_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        auth_rate_limiter: auth_rate_limit::AuthRateLimiter::default(),
         company_lookup_service,
         invoice_sequence: db.invoice_sequence.clone(),
         invoice_service,
@@ -182,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
         export_service,
         offline_service,
         qr_service,
+        audit_service,
     };
 
     // Session store — type differs per backend so we build the final app in each branch.
@@ -192,7 +201,9 @@ async fn main() -> anyhow::Result<()> {
             ServeDir::new(
                 std::env::var("ASSETS_DIR")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")),
+                    .unwrap_or_else(|_| {
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
+                    }),
             ),
         )
         .with_state(app_state);
@@ -203,7 +214,11 @@ async fn main() -> anyhow::Result<()> {
             let session_store = tower_sessions_sqlx_store::SqliteStore::new(pool);
             session_store.migrate().await?;
             let session_layer = SessionManagerLayer::new(session_store)
-                .with_expiry(Expiry::OnInactivity(CookieDuration::days(7)));
+                .with_expiry(Expiry::OnInactivity(CookieDuration::days(7)))
+                .with_http_only(true)
+                .with_secure(true)
+                .with_same_site(SameSite::Strict)
+                .with_path("/");
             base_router.layer(session_layer)
         }
         db_backend::DatabaseBackendKind::Postgres => {
@@ -211,11 +226,14 @@ async fn main() -> anyhow::Result<()> {
             let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool);
             session_store.migrate().await?;
             let session_layer = SessionManagerLayer::new(session_store)
-                .with_expiry(Expiry::OnInactivity(CookieDuration::days(7)));
+                .with_expiry(Expiry::OnInactivity(CookieDuration::days(7)))
+                .with_http_only(true)
+                .with_secure(true)
+                .with_same_site(SameSite::Strict)
+                .with_path("/");
             base_router.layer(session_layer)
         }
     };
-
 
     let addr = format!("{}:{}", config.server_host, config.server_port);
     let listener = TcpListener::bind(&addr).await?;

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use ksef_core::infra::{pg, sqlite};
+use ksef_core::ports::audit_log::AuditLogRepository;
 use ksef_core::ports::company_cache::CompanyCacheRepository;
 use ksef_core::ports::invoice_repository::InvoiceRepository;
 use ksef_core::ports::invoice_sequence::InvoiceSequenceRepository;
@@ -32,6 +33,7 @@ pub struct DatabasePorts {
     pub nip_account_repo: Arc<dyn NipAccountRepository>,
     pub company_cache: Arc<dyn CompanyCacheRepository>,
     pub invoice_sequence: Arc<dyn InvoiceSequenceRepository>,
+    pub audit_log_repo: Arc<dyn AuditLogRepository>,
 }
 
 pub fn detect_backend_kind(database_url: &str) -> anyhow::Result<DatabaseBackendKind> {
@@ -111,6 +113,7 @@ async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
     let nip_account_repo: Arc<dyn NipAccountRepository> = db.clone();
     let company_cache: Arc<dyn CompanyCacheRepository> = db.clone();
     let invoice_sequence: Arc<dyn InvoiceSequenceRepository> = db.clone();
+    let audit_log_repo: Arc<dyn AuditLogRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -123,6 +126,7 @@ async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
         nip_account_repo,
         company_cache,
         invoice_sequence,
+        audit_log_repo,
     })
 }
 
@@ -158,6 +162,7 @@ async fn connect_sqlite(database_url: &str) -> anyhow::Result<DatabasePorts> {
     let nip_account_repo: Arc<dyn NipAccountRepository> = db.clone();
     let company_cache: Arc<dyn CompanyCacheRepository> = db.clone();
     let invoice_sequence: Arc<dyn InvoiceSequenceRepository> = db.clone();
+    let audit_log_repo: Arc<dyn AuditLogRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -170,6 +175,7 @@ async fn connect_sqlite(database_url: &str) -> anyhow::Result<DatabasePorts> {
         nip_account_repo,
         company_cache,
         invoice_sequence,
+        audit_log_repo,
     })
 }
 

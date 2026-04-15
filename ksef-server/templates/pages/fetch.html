@@ -18,6 +18,7 @@
   {% endif %}
 
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="form-stack">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       <div class="form-group">
         <label for="date_from">Data od</label>

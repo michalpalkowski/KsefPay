@@ -1,11 +1,12 @@
 use askama::Template;
-use axum::Form;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::{Datelike, NaiveDate};
 use serde::Deserialize;
+use tower_sessions::Session;
 
+use ksef_core::domain::audit::AuditAction;
 use ksef_core::domain::invoice::{
     Address, CountryCode, Currency, Direction, Invoice, InvoiceId, InvoiceType, LineItem, Money,
     Party, PaymentMethod, Quantity, VatRate, format_invoice_number,
@@ -15,7 +16,10 @@ use ksef_core::error::RepositoryError;
 use ksef_core::ports::invoice_repository::InvoiceFilter;
 use ksef_core::services::invoice_service::{CreateInvoiceInput, InvoiceServiceError};
 
-use crate::extractors::NipContext;
+use crate::audit_log::log_action as log_audit_action;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::{CsrfForm, NipContext};
+use crate::request_meta::client_ip;
 use crate::state::AppState;
 
 // --- Templates ---
@@ -39,6 +43,7 @@ struct InvoiceDetailTemplate {
     nip_prefix: Option<String>,
     user_email: String,
     invoice: Invoice,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -49,6 +54,7 @@ struct InvoiceNewTemplate {
     user_email: String,
     error: Option<String>,
     f: InvoiceFormValues,
+    csrf_token: String,
 }
 
 /// Values to pre-fill in the invoice form. Separate from `InvoiceFormData`
@@ -158,6 +164,9 @@ pub struct InvoiceFormData {
     pub bank_account: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct SubmitInvoiceForm {}
+
 // --- Handlers ---
 
 pub async fn list(
@@ -201,7 +210,7 @@ pub async fn list(
     })
 }
 
-fn new_form_defaults(nip_ctx: &NipContext) -> InvoiceNewTemplate {
+fn new_form_defaults(nip_ctx: &NipContext, csrf_token: String) -> InvoiceNewTemplate {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let deadline = (chrono::Local::now() + chrono::Duration::days(14))
         .format("%Y-%m-%d")
@@ -231,11 +240,17 @@ fn new_form_defaults(nip_ctx: &NipContext) -> InvoiceNewTemplate {
             payment_deadline: deadline,
             bank_account: String::new(),
         },
+        csrf_token,
     }
 }
 
-pub async fn new_form(State(state): State<AppState>, nip_ctx: NipContext) -> impl IntoResponse {
-    let mut tmpl = new_form_defaults(&nip_ctx);
+pub async fn new_form(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    session: Session,
+) -> impl IntoResponse {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    let mut tmpl = new_form_defaults(&nip_ctx, csrf_token);
 
     // Auto-fill seller data from Biała Lista cache
     if let Ok(info) = state
@@ -268,6 +283,7 @@ fn split_address(address: &str) -> (String, String) {
 pub async fn detail(
     State(state): State<AppState>,
     nip_ctx: NipContext,
+    session: Session,
     Path((_nip, id)): Path<(String, String)>,
 ) -> Response {
     let invoice_id: InvoiceId = match id.parse() {
@@ -286,12 +302,16 @@ pub async fn detail(
         .find(&invoice_id, &nip_ctx.account.id)
         .await
     {
-        Ok(invoice) => render(InvoiceDetailTemplate {
-            active: "/invoices",
-            nip_prefix: Some(nip_ctx.account.nip.to_string()),
-            user_email: nip_ctx.user.email,
-            invoice,
-        })
+        Ok(invoice) => {
+            let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+            render(InvoiceDetailTemplate {
+                active: "/invoices",
+                nip_prefix: Some(nip_ctx.account.nip.to_string()),
+                user_email: nip_ctx.user.email,
+                invoice,
+                csrf_token,
+            })
+        }
         .into_response(),
         Err(err) => (
             status_for_service_error(&err),
@@ -304,10 +324,17 @@ pub async fn detail(
 pub async fn create(
     State(state): State<AppState>,
     nip_ctx: NipContext,
-    Form(form): Form<InvoiceFormData>,
+    headers: HeaderMap,
+    session: Session,
+    CsrfForm(form): CsrfForm<InvoiceFormData>,
 ) -> Response {
-    let nip_str = nip_ctx.account.nip.to_string();
+    let user_id = nip_ctx.user.id.clone();
+    let user_email = nip_ctx.user.email.clone();
+    let account_nip = nip_ctx.account.nip.clone();
+    let account_id = nip_ctx.account.id.clone();
+    let nip_str = account_nip.to_string();
     let form_values = InvoiceFormValues::from(form.clone());
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
     let mut input = match parse_form_to_input(form) {
         Ok(input) => input,
@@ -317,9 +344,10 @@ pub async fn create(
                 InvoiceNewTemplate {
                     active: "/invoices",
                     nip_prefix: Some(nip_str),
-                    user_email: nip_ctx.user.email,
+                    user_email,
                     error: Some(e),
                     f: form_values,
+                    csrf_token,
                 },
             );
         }
@@ -343,9 +371,10 @@ pub async fn create(
                     InvoiceNewTemplate {
                         active: "/invoices",
                         nip_prefix: Some(nip_str),
-                        user_email: nip_ctx.user.email,
+                        user_email,
                         error: Some(format!("Błąd generowania numeru faktury: {e}")),
                         f: form_values,
+                        csrf_token,
                     },
                 );
             }
@@ -354,10 +383,24 @@ pub async fn create(
 
     match state
         .invoice_service
-        .create_draft(input, nip_ctx.account.id.clone())
+        .create_draft(input, account_id.clone())
         .await
     {
         Ok(invoice) => {
+            log_audit_action(
+                &state,
+                &user_id,
+                &user_email,
+                Some(&account_nip),
+                AuditAction::CreateInvoice,
+                Some(format!(
+                    "invoice_id={},invoice_number={}",
+                    invoice.id, invoice.invoice_number
+                )),
+                client_ip(&headers),
+            )
+            .await;
+
             Redirect::to(&format!("/accounts/{nip_str}/invoices/{}", invoice.id)).into_response()
         }
         Err(e) => {
@@ -367,9 +410,10 @@ pub async fn create(
                 InvoiceNewTemplate {
                     active: "/invoices",
                     nip_prefix: Some(nip_str),
-                    user_email: nip_ctx.user.email,
+                    user_email,
                     error: Some(format!("Nie udało się utworzyć faktury: {e}")),
                     f: form_values,
+                    csrf_token,
                 },
             )
         }
@@ -379,9 +423,14 @@ pub async fn create(
 pub async fn submit(
     State(state): State<AppState>,
     nip_ctx: NipContext,
+    headers: HeaderMap,
     Path((_nip, id)): Path<(String, String)>,
+    CsrfForm(_form): CsrfForm<SubmitInvoiceForm>,
 ) -> Response {
     let nip_str = nip_ctx.account.nip.to_string();
+    let user_id = nip_ctx.user.id.clone();
+    let user_email = nip_ctx.user.email.clone();
+    let account_nip = nip_ctx.account.nip.clone();
     let invoice_id: InvoiceId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -399,6 +448,17 @@ pub async fn submit(
         .await
     {
         Ok(()) => {
+            log_audit_action(
+                &state,
+                &user_id,
+                &user_email,
+                Some(&account_nip),
+                AuditAction::SubmitInvoice,
+                Some(format!("invoice_id={invoice_id}")),
+                client_ip(&headers),
+            )
+            .await;
+
             Redirect::to(&format!("/accounts/{nip_str}/invoices/{invoice_id}")).into_response()
         }
         Err(err) => (

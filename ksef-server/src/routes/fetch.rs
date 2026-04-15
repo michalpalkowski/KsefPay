@@ -1,17 +1,19 @@
 use askama::Template;
-use axum::Form;
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tower_sessions::Session;
+use tracing::{error, info, warn};
 
-use ksef_core::domain::session::{InvoiceQuery, SubjectType};
-
-use crate::extractors::NipContext;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::{CsrfForm, NipContext};
+use crate::request_meta::client_ip;
 use crate::state::{AppState, FetchJobStatus};
+use ksef_core::domain::audit::AuditAction;
+use ksef_core::domain::session::{InvoiceQuery, SubjectType};
 
 // --- Templates ---
 
@@ -24,6 +26,7 @@ struct FetchFormTemplate {
     error: Option<String>,
     default_date_from: String,
     default_date_to: String,
+    csrf_token: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -63,11 +66,12 @@ pub struct FetchStatusResponse {
 
 // --- Handlers ---
 
-pub async fn fetch_form(nip_ctx: NipContext) -> impl IntoResponse {
+pub async fn fetch_form(nip_ctx: NipContext, session: Session) -> impl IntoResponse {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let month_ago = (chrono::Local::now() - chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
     render(FetchFormTemplate {
         active: "/fetch",
@@ -76,27 +80,35 @@ pub async fn fetch_form(nip_ctx: NipContext) -> impl IntoResponse {
         error: None,
         default_date_from: month_ago,
         default_date_to: today,
+        csrf_token,
     })
 }
 
 pub async fn fetch_execute(
     State(state): State<AppState>,
     nip_ctx: NipContext,
-    Form(form): Form<FetchFormData>,
+    headers: HeaderMap,
+    session: Session,
+    CsrfForm(form): CsrfForm<FetchFormData>,
 ) -> Response {
     let nip_str = nip_ctx.account.nip.to_string();
+    let account_id = nip_ctx.account.id.clone();
+    let account_nip = nip_ctx.account.nip.clone();
+    let user_id = nip_ctx.user.id.clone();
     let user_email = nip_ctx.user.email;
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    let ip_address = client_ip(&headers);
 
     let date_from = match NaiveDate::parse_from_str(&form.date_from, "%Y-%m-%d") {
         Ok(d) => d,
         Err(e) => {
-            return render_form_error(nip_str, user_email, format!("Data od: {e}"));
+            return render_form_error(nip_str, user_email, format!("Data od: {e}"), csrf_token);
         }
     };
     let date_to = match NaiveDate::parse_from_str(&form.date_to, "%Y-%m-%d") {
         Ok(d) => d,
         Err(e) => {
-            return render_form_error(nip_str, user_email, format!("Data do: {e}"));
+            return render_form_error(nip_str, user_email, format!("Data do: {e}"), csrf_token);
         }
     };
     if date_from > date_to {
@@ -104,13 +116,19 @@ pub async fn fetch_execute(
             nip_str,
             user_email,
             "Data od musi być mniejsza lub równa dacie do".to_string(),
+            csrf_token,
         );
     }
 
     let subject_type: SubjectType = match form.subject_type.parse() {
         Ok(st) => st,
         Err(e) => {
-            return render_form_error(nip_str, user_email, format!("Typ podmiotu: {e}"));
+            return render_form_error(
+                nip_str,
+                user_email,
+                format!("Typ podmiotu: {e}"),
+                csrf_token,
+            );
         }
     };
 
@@ -123,14 +141,18 @@ pub async fn fetch_execute(
     // Mark as running
     {
         let mut jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
-        jobs.insert(nip_str.clone(), FetchJobStatus::Running);
+        jobs.insert(account_id.clone(), FetchJobStatus::Running);
     }
 
     let nip = nip_ctx.account.nip.clone();
-    let account_id = nip_ctx.account.id.clone();
     let fetch_service = state.fetch_service.clone();
+    let audit_service = state.audit_service.clone();
     let fetch_jobs = state.fetch_jobs.clone();
-    let job_key = nip_str.clone();
+    let job_key = account_id.clone();
+    let audit_user_id = user_id;
+    let audit_user_email = user_email.clone();
+    let audit_nip = account_nip;
+    let audit_ip = ip_address;
 
     tokio::spawn(async move {
         match fetch_service
@@ -150,15 +172,36 @@ pub async fn fetch_execute(
                     .iter()
                     .map(|e| format!("{}: {}", e.ksef_number, e.error))
                     .collect();
-                let mut jobs = fetch_jobs.lock().expect("fetch_jobs lock");
-                jobs.insert(
-                    job_key,
-                    FetchJobStatus::Done {
-                        inserted: result.inserted,
-                        updated: result.updated,
-                        errors: error_msgs,
-                    },
-                );
+                {
+                    let mut jobs = fetch_jobs.lock().expect("fetch_jobs lock");
+                    jobs.insert(
+                        job_key,
+                        FetchJobStatus::Done {
+                            inserted: result.inserted,
+                            updated: result.updated,
+                            errors: error_msgs,
+                        },
+                    );
+                }
+
+                if let Err(err) = audit_service
+                    .log_action(
+                        &audit_user_id,
+                        &audit_user_email,
+                        Some(&audit_nip),
+                        AuditAction::FetchInvoices,
+                        Some(format!(
+                            "inserted={},updated={},errors={}",
+                            result.inserted,
+                            result.updated,
+                            result.errors.len()
+                        )),
+                        audit_ip.clone(),
+                    )
+                    .await
+                {
+                    warn!(error = %err, user_id = %audit_user_id, "failed to write audit log");
+                }
             }
             Err(e) => {
                 error!(nip = %nip, error = %e, "Fetch failed");
@@ -176,10 +219,10 @@ pub async fn fetch_status(
     State(state): State<AppState>,
     nip_ctx: NipContext,
 ) -> Json<FetchStatusResponse> {
-    let nip_str = nip_ctx.account.nip.to_string();
+    let account_id = nip_ctx.account.id.clone();
     let status = {
         let jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
-        jobs.get(&nip_str).cloned()
+        jobs.get(&account_id).cloned()
     };
 
     match status {
@@ -198,7 +241,7 @@ pub async fn fetch_status(
             // Clean up after reading
             {
                 let mut jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
-                jobs.remove(&nip_str);
+                jobs.remove(&account_id);
             }
             Json(FetchStatusResponse {
                 status: "done".to_string(),
@@ -215,7 +258,7 @@ pub async fn fetch_status(
         Some(FetchJobStatus::Failed(msg)) => {
             {
                 let mut jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
-                jobs.remove(&nip_str);
+                jobs.remove(&account_id);
             }
             Json(FetchStatusResponse {
                 status: "failed".to_string(),
@@ -235,7 +278,12 @@ pub async fn fetch_status(
     }
 }
 
-fn render_form_error(nip_prefix: String, user_email: String, error: String) -> Response {
+fn render_form_error(
+    nip_prefix: String,
+    user_email: String,
+    error: String,
+    csrf_token: String,
+) -> Response {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let month_ago = (chrono::Local::now() - chrono::Duration::days(30))
         .format("%Y-%m-%d")
@@ -248,5 +296,6 @@ fn render_form_error(nip_prefix: String, user_email: String, error: String) -> R
         error: Some(error),
         default_date_from: month_ago,
         default_date_to: today,
+        csrf_token,
     })
 }

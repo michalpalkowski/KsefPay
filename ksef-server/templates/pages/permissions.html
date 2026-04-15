@@ -20,6 +20,7 @@
 <div class="page-card">
   <h2>Nadaj uprawnienie</h2>
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/permissions/grant" class="form-stack">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       {% call forms::nip_input("grant_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
       {% call forms::nip_input("grant_auth", "authorized_nip", "NIP uprawnionego") %}{% endcall %}
@@ -37,6 +38,7 @@
 <div class="page-card">
   <h2>Odebierz uprawnienie</h2>
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/permissions/revoke" class="form-stack">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       {% call forms::nip_input("revoke_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
       {% call forms::nip_input("revoke_auth", "authorized_nip", "NIP uprawnionego") %}{% endcall %}
@@ -54,6 +56,7 @@
 <div class="page-card">
   <h2>Zapytanie o uprawnienia</h2>
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/permissions/query" class="form-stack">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       {% call forms::nip_input("query_ctx", "context_nip", "NIP kontekstu") %}{% endcall %}
     </div>

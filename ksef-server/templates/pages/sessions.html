@@ -40,12 +40,14 @@
   <div class="actions">
     {% if let Some(nip) = nip_prefix %}
     <form method="post" action="/accounts/{{ nip }}/sessions/authenticate">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
       <button type="submit" class="btn btn-primary">
         {% if has_token %}Odnow token{% else %}Uwierzytelnij{% endif %}
       </button>
     </form>
     {% if has_session %}
     <form method="post" action="/accounts/{{ nip }}/sessions/close" onsubmit="return confirm('Czy na pewno chcesz zamknąć sesję online?')">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
       <button type="submit" class="btn btn-danger">Zamknij sesje online</button>
     </form>
     {% endif %}

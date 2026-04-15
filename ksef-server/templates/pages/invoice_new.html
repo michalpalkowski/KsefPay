@@ -15,6 +15,7 @@
   {% endif %}
 
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="invoice-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <fieldset>
       <legend>Dane faktury</legend>
       <div class="form-row">

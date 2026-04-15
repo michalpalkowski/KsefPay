@@ -2,10 +2,13 @@ use askama::Template;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
+use serde::Deserialize;
+use tower_sessions::Session;
 
 use ksef_core::domain::nip::Nip;
 
-use crate::extractors::NipContext;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::{CsrfForm, NipContext};
 use crate::state::AppState;
 
 #[derive(Template)]
@@ -18,6 +21,7 @@ struct SessionsTemplate {
     has_session: bool,
     error: Option<String>,
     success: Option<String>,
+    csrf_token: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -37,10 +41,18 @@ async fn session_state(state: &AppState, nip: &Nip) -> (bool, bool) {
     (has_token, has_session)
 }
 
-pub async fn sessions_page(State(state): State<AppState>, nip_ctx: NipContext) -> Response {
+#[derive(Deserialize)]
+pub struct SessionActionForm {}
+
+pub async fn sessions_page(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    session: Session,
+) -> Response {
     let nip = &nip_ctx.account.nip;
     let nip_str = nip.to_string();
     let (has_token, has_session) = session_state(&state, nip).await;
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     render(SessionsTemplate {
         active: "/sessions",
         nip_prefix: Some(nip_str),
@@ -49,12 +61,19 @@ pub async fn sessions_page(State(state): State<AppState>, nip_ctx: NipContext) -
         has_session,
         error: None,
         success: None,
+        csrf_token,
     })
 }
 
-pub async fn authenticate(State(state): State<AppState>, nip_ctx: NipContext) -> Response {
+pub async fn authenticate(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    session: Session,
+    CsrfForm(_form): CsrfForm<SessionActionForm>,
+) -> Response {
     let nip = &nip_ctx.account.nip;
     let nip_str = nip.to_string();
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     match state.session_service.authenticate(nip).await {
         Ok(_token_pair) => {
             let (has_token, has_session) = session_state(&state, nip).await;
@@ -66,6 +85,7 @@ pub async fn authenticate(State(state): State<AppState>, nip_ctx: NipContext) ->
                 has_session,
                 error: None,
                 success: Some("Uwierzytelnienie zakonczone pomyslnie".to_string()),
+                csrf_token,
             })
         }
         Err(e) => {
@@ -78,14 +98,21 @@ pub async fn authenticate(State(state): State<AppState>, nip_ctx: NipContext) ->
                 has_session,
                 error: Some(format!("Uwierzytelnienie nie powiodło się: {e}")),
                 success: None,
+                csrf_token,
             })
         }
     }
 }
 
-pub async fn close_session(State(state): State<AppState>, nip_ctx: NipContext) -> Response {
+pub async fn close_session(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    session: Session,
+    CsrfForm(_form): CsrfForm<SessionActionForm>,
+) -> Response {
     let nip = &nip_ctx.account.nip;
     let nip_str = nip.to_string();
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     match state.session_service.close_session(nip).await {
         Ok(_upo) => {
             let (has_token, has_session) = session_state(&state, nip).await;
@@ -97,6 +124,7 @@ pub async fn close_session(State(state): State<AppState>, nip_ctx: NipContext) -
                 has_session,
                 error: None,
                 success: Some("Sesja zamknięta".to_string()),
+                csrf_token,
             })
         }
         Err(e) => {
@@ -109,6 +137,7 @@ pub async fn close_session(State(state): State<AppState>, nip_ctx: NipContext) -
                 has_session,
                 error: Some(format!("Zamknięcie sesji nie powiodło się: {e}")),
                 success: None,
+                csrf_token,
             })
         }
     }
@@ -132,6 +161,7 @@ mod tests {
             has_session,
             error,
             success,
+            csrf_token: "test-csrf-token".to_string(),
         }
     }
 

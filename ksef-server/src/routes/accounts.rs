@@ -1,17 +1,18 @@
 use askama::Template;
-use axum::Form;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::Utc;
 use serde::Deserialize;
+use tower_sessions::Session;
 
 use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use ksef_core::infra::ksef::TestDataClient;
 
-use crate::extractors::AuthUser;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::{AuthUser, CsrfForm};
 use crate::state::AppState;
 
 // --- Templates ---
@@ -34,6 +35,7 @@ struct AccountAddTemplate {
     error: Option<String>,
     nip: String,
     display_name: String,
+    csrf_token: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -88,7 +90,8 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> Response {
     })
 }
 
-pub async fn add_form(auth: AuthUser) -> Response {
+pub async fn add_form(auth: AuthUser, session: Session) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     render(AccountAddTemplate {
         active: "/accounts",
         nip_prefix: None,
@@ -96,14 +99,17 @@ pub async fn add_form(auth: AuthUser) -> Response {
         error: None,
         nip: String::new(),
         display_name: String::new(),
+        csrf_token,
     })
 }
 
 pub async fn add(
     State(state): State<AppState>,
     auth: AuthUser,
-    Form(form): Form<AddAccountFormData>,
+    session: Session,
+    CsrfForm(form): CsrfForm<AddAccountFormData>,
 ) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     let form_nip = form.nip.clone();
     let form_display_name = form.display_name.clone();
 
@@ -119,6 +125,7 @@ pub async fn add(
                     error: Some(format!("Nieprawidłowy NIP: {e}")),
                     nip: form_nip,
                     display_name: form_display_name,
+                    csrf_token,
                 },
             );
         }
@@ -135,6 +142,7 @@ pub async fn add(
                 error: Some("Nazwa wyswietlana jest wymagana".to_string()),
                 nip: form_nip,
                 display_name: form_display_name,
+                csrf_token,
             },
         );
     }
@@ -167,6 +175,7 @@ pub async fn add(
                         error: Some(format!("Nie udało się utworzyć konta NIP: {e}")),
                         nip: form_nip,
                         display_name: form_display_name,
+                        csrf_token,
                     },
                 );
             }
@@ -182,6 +191,7 @@ pub async fn add(
                     error: Some(format!("Błąd serwera: {e}")),
                     nip: form_nip,
                     display_name: form_display_name,
+                    csrf_token,
                 },
             );
         }

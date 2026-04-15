@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use ksef_core::domain::environment::KSeFEnvironment;
+use ksef_core::domain::nip_account::NipAccountId;
 use ksef_core::ports::invoice_sequence::InvoiceSequenceRepository;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::user_repository::UserRepository;
+use ksef_core::services::audit_service::AuditService;
 use ksef_core::services::batch_service::BatchService;
 use ksef_core::services::company_lookup_service::CompanyLookupService;
 use ksef_core::services::export_service::ExportService;
@@ -16,8 +18,10 @@ use ksef_core::services::qr_service::QRService;
 use ksef_core::services::session_service::SessionService;
 use ksef_core::services::token_mgmt_service::TokenMgmtService;
 
+use crate::auth_rate_limit::AuthRateLimiter;
+
 /// AES key + IV pair for export decryption.
-pub type ExportKeyStore = Arc<Mutex<HashMap<String, (Vec<u8>, Vec<u8>)>>>;
+pub type ExportKeyStore = Arc<Mutex<HashMap<(NipAccountId, String), (Vec<u8>, Vec<u8>)>>>;
 
 /// Status of a background fetch job.
 #[derive(Clone)]
@@ -31,8 +35,8 @@ pub enum FetchJobStatus {
     Failed(String),
 }
 
-/// In-memory store for background fetch jobs, keyed by NIP.
-pub type FetchJobStore = Arc<Mutex<HashMap<String, FetchJobStatus>>>;
+/// In-memory store for background fetch jobs, keyed by NIP account ID.
+pub type FetchJobStore = Arc<Mutex<HashMap<NipAccountId, FetchJobStatus>>>;
 
 /// Shared application state injected into Axum handlers.
 #[derive(Clone)]
@@ -52,8 +56,11 @@ pub struct AppState {
     pub export_service: Arc<ExportService>,
     pub offline_service: Arc<OfflineService>,
     pub qr_service: Arc<QRService>,
-    /// Temporary store for export encryption keys keyed by reference number.
+    pub audit_service: Arc<AuditService>,
+    /// Temporary store for export encryption keys keyed by `(account_id, reference)`.
     pub export_keys: ExportKeyStore,
-    /// Background fetch job statuses keyed by NIP.
+    /// Background fetch job statuses keyed by NIP account ID.
     pub fetch_jobs: FetchJobStore,
+    /// Rate limiter for auth endpoints (`/login`, `/register`).
+    pub auth_rate_limiter: AuthRateLimiter,
 }
