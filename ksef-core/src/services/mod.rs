@@ -1,4 +1,5 @@
 pub mod batch_service;
+pub mod company_lookup_service;
 pub mod export_service;
 pub mod fetch_service;
 pub mod invoice_service;

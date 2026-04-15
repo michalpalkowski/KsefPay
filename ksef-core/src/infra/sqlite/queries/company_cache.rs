@@ -1,0 +1,79 @@
+use sqlx::SqliteExecutor;
+
+use super::datetime::parse_sqlite_datetime;
+use crate::domain::company::{CompanyInfo, VatStatus};
+use crate::domain::nip::Nip;
+use crate::error::RepositoryError;
+
+#[derive(sqlx::FromRow)]
+struct CompanyCacheRow {
+    nip: String,
+    name: String,
+    address: String,
+    bank_accounts: String,
+    vat_status: String,
+    fetched_at: String,
+}
+
+fn decode_err(msg: String) -> RepositoryError {
+    RepositoryError::Database(sqlx::Error::Decode(msg.into()))
+}
+
+impl CompanyCacheRow {
+    fn into_domain(self) -> Result<CompanyInfo, RepositoryError> {
+        let nip = Nip::parse(&self.nip)
+            .map_err(|e| decode_err(format!("invalid NIP in company_cache: {e}")))?;
+        let bank_accounts: Vec<String> =
+            serde_json::from_str(&self.bank_accounts).unwrap_or_default();
+        let fetched_at =
+            parse_sqlite_datetime(&self.fetched_at, "fetched_at").map_err(decode_err)?;
+        Ok(CompanyInfo {
+            nip,
+            name: self.name,
+            address: self.address,
+            bank_accounts,
+            vat_status: VatStatus::from_whitelist(&self.vat_status),
+            fetched_at,
+        })
+    }
+}
+
+pub async fn get<'e>(
+    exec: impl SqliteExecutor<'e>,
+    nip: &Nip,
+) -> Result<Option<CompanyInfo>, RepositoryError> {
+    let row: Option<CompanyCacheRow> = sqlx::query_as(
+        "SELECT nip, name, address, bank_accounts, vat_status, fetched_at FROM company_cache WHERE nip = ?",
+    )
+    .bind(nip.as_str())
+    .fetch_optional(exec)
+    .await?;
+    row.map(CompanyCacheRow::into_domain).transpose()
+}
+
+pub async fn set<'e>(
+    exec: impl SqliteExecutor<'e>,
+    info: &CompanyInfo,
+) -> Result<(), RepositoryError> {
+    let bank_accounts_json =
+        serde_json::to_string(&info.bank_accounts).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query(
+        r"INSERT INTO company_cache (nip, name, address, bank_accounts, vat_status, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (nip) DO UPDATE SET
+            name = excluded.name,
+            address = excluded.address,
+            bank_accounts = excluded.bank_accounts,
+            vat_status = excluded.vat_status,
+            fetched_at = excluded.fetched_at",
+    )
+    .bind(info.nip.as_str())
+    .bind(&info.name)
+    .bind(&info.address)
+    .bind(&bank_accounts_json)
+    .bind(info.vat_status.to_string())
+    .bind(info.fetched_at.to_rfc3339())
+    .execute(exec)
+    .await?;
+    Ok(())
+}

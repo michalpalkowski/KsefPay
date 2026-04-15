@@ -10,6 +10,14 @@ use crate::error::DomainError;
 use super::nip::Nip;
 use super::session::KSeFNumber;
 
+/// Format an invoice number: `{prefix}/{year}/{month:02}/{seq:03}`.
+///
+/// Example: `format_invoice_number("FV", 2026, 4, 7)` → `"FV/2026/04/007"`.
+#[must_use]
+pub fn format_invoice_number(prefix: &str, year: i32, month: u32, sequence: u32) -> String {
+    format!("{prefix}/{year}/{month:02}/{sequence:03}")
+}
+
 /// Unique identifier for an invoice in our system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InvoiceId(Uuid);
@@ -1322,5 +1330,29 @@ mod tests {
     #[test]
     fn currency_pln_shortcut() {
         assert_eq!(Currency::pln().as_str(), "PLN");
+    }
+
+    #[test]
+    fn format_invoice_number_standard() {
+        assert_eq!(
+            super::format_invoice_number("FV", 2026, 4, 7),
+            "FV/2026/04/007"
+        );
+    }
+
+    #[test]
+    fn format_invoice_number_january_first() {
+        assert_eq!(
+            super::format_invoice_number("FV", 2026, 1, 1),
+            "FV/2026/01/001"
+        );
+    }
+
+    #[test]
+    fn format_invoice_number_custom_prefix() {
+        assert_eq!(
+            super::format_invoice_number("PROJ", 2026, 12, 42),
+            "PROJ/2026/12/042"
+        );
     }
 }

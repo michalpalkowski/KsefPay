@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::Mutex;
 
+use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
 use crate::domain::job::{Job, JobId};
@@ -12,7 +13,9 @@ use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
 use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
+use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
+use crate::ports::invoice_sequence::InvoiceSequenceRepository;
 use crate::ports::job_queue::JobQueue;
 use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
@@ -41,6 +44,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../migrations/005_multi_tenant_auth.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/006_company_cache_and_invoice_sequences.sql"
     ))
     .execute(pool)
     .await?;
@@ -236,6 +244,32 @@ impl NipAccountRepository for Db {
         nip: &Nip,
     ) -> Result<Option<NipAccount>, RepositoryError> {
         queries::nip_account::has_access(&self.pool, user_id, nip).await
+    }
+}
+
+// --- Db: InvoiceSequenceRepository ---
+
+#[async_trait]
+impl InvoiceSequenceRepository for Db {
+    async fn next_number(
+        &self,
+        seller_nip: &Nip,
+        year: i32,
+        month: u32,
+    ) -> Result<u32, RepositoryError> {
+        queries::invoice_sequence::next_number(&self.pool, seller_nip, year, month).await
+    }
+}
+
+// --- Db: CompanyCacheRepository ---
+
+#[async_trait]
+impl CompanyCacheRepository for Db {
+    async fn get(&self, nip: &Nip) -> Result<Option<CompanyInfo>, RepositoryError> {
+        queries::company_cache::get(&self.pool, nip).await
+    }
+    async fn set(&self, info: &CompanyInfo) -> Result<(), RepositoryError> {
+        queries::company_cache::set(&self.pool, info).await
     }
 }
 

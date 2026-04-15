@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod batch;
+pub mod company;
 pub mod certificate;
 pub mod certificate_mgmt;
 pub mod crypto;

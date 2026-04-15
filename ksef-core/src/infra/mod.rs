@@ -7,3 +7,4 @@ pub mod pg;
 pub mod qr;
 pub mod sqlite;
 pub mod validation;
+pub mod whitelist;
