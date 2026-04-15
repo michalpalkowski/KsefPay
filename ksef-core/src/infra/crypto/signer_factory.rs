@@ -17,12 +17,9 @@ impl SignerFactory for OpenSslSignerFactory {
         credentials: SignerCredentials<'_>,
     ) -> Result<Arc<dyn XadesSigner>, CryptoError> {
         match credentials {
-            SignerCredentials::Pem { cert_pem, key_pem } => {
-                Ok(Arc::new(OpenSslXadesSigner::from_pem(
-                    key_pem.to_vec(),
-                    cert_pem.to_vec(),
-                )))
-            }
+            SignerCredentials::Pem { cert_pem, key_pem } => Ok(Arc::new(
+                OpenSslXadesSigner::from_pem(key_pem.to_vec(), cert_pem.to_vec()),
+            )),
             SignerCredentials::AutoGenerate => {
                 tracing::info!(nip = %nip, "auto-generating self-signed certificate");
                 let signer = OpenSslXadesSigner::generate_self_signed_for_nip(nip)?;

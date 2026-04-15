@@ -110,11 +110,10 @@ pub async fn find_by_nip<'e>(
     exec: impl PgExecutor<'e>,
     nip: &Nip,
 ) -> Result<Option<NipAccount>, RepositoryError> {
-    let row: Option<NipAccountRow> =
-        sqlx::query_as("SELECT * FROM nip_accounts WHERE nip = $1")
-            .bind(nip.as_str())
-            .fetch_optional(exec)
-            .await?;
+    let row: Option<NipAccountRow> = sqlx::query_as("SELECT * FROM nip_accounts WHERE nip = $1")
+        .bind(nip.as_str())
+        .fetch_optional(exec)
+        .await?;
     row.map(NipAccountRow::into_domain).transpose()
 }
 

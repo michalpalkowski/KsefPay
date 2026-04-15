@@ -24,10 +24,7 @@ impl UserRow {
     }
 }
 
-pub async fn create<'e>(
-    exec: impl PgExecutor<'e>,
-    user: &User,
-) -> Result<UserId, RepositoryError> {
+pub async fn create<'e>(exec: impl PgExecutor<'e>, user: &User) -> Result<UserId, RepositoryError> {
     sqlx::query(
         r"INSERT INTO users (id, email, password_hash, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5)",
@@ -82,14 +79,12 @@ pub async fn update_password<'e>(
     exec: impl PgExecutor<'e>,
     user: &User,
 ) -> Result<(), RepositoryError> {
-    let result = sqlx::query(
-        r"UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
-    )
-    .bind(&user.password_hash)
-    .bind(user.updated_at)
-    .bind(user.id.as_uuid())
-    .execute(exec)
-    .await?;
+    let result = sqlx::query(r"UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3")
+        .bind(&user.password_hash)
+        .bind(user.updated_at)
+        .bind(user.id.as_uuid())
+        .execute(exec)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(RepositoryError::NotFound {

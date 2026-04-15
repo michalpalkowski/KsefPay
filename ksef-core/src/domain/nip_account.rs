@@ -111,8 +111,14 @@ mod tests {
 
     #[test]
     fn ksef_auth_method_round_trips() {
-        assert_eq!("xades".parse::<KSeFAuthMethod>().unwrap(), KSeFAuthMethod::Xades);
-        assert_eq!("token".parse::<KSeFAuthMethod>().unwrap(), KSeFAuthMethod::Token);
+        assert_eq!(
+            "xades".parse::<KSeFAuthMethod>().unwrap(),
+            KSeFAuthMethod::Xades
+        );
+        assert_eq!(
+            "token".parse::<KSeFAuthMethod>().unwrap(),
+            KSeFAuthMethod::Token
+        );
         assert_eq!(KSeFAuthMethod::Xades.to_string(), "xades");
         assert_eq!(KSeFAuthMethod::Token.to_string(), "token");
     }
@@ -124,7 +130,13 @@ mod tests {
 
     #[test]
     fn ksef_auth_method_case_insensitive() {
-        assert_eq!("XADES".parse::<KSeFAuthMethod>().unwrap(), KSeFAuthMethod::Xades);
-        assert_eq!("Token".parse::<KSeFAuthMethod>().unwrap(), KSeFAuthMethod::Token);
+        assert_eq!(
+            "XADES".parse::<KSeFAuthMethod>().unwrap(),
+            KSeFAuthMethod::Xades
+        );
+        assert_eq!(
+            "Token".parse::<KSeFAuthMethod>().unwrap(),
+            KSeFAuthMethod::Token
+        );
     }
 }

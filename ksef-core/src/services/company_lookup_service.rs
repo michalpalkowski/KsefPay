@@ -24,10 +24,7 @@ pub enum CompanyLookupServiceError {
 
 impl CompanyLookupService {
     #[must_use]
-    pub fn new(
-        cache: Arc<dyn CompanyCacheRepository>,
-        lookup: Arc<dyn CompanyLookup>,
-    ) -> Self {
+    pub fn new(cache: Arc<dyn CompanyCacheRepository>, lookup: Arc<dyn CompanyLookup>) -> Self {
         Self { cache, lookup }
     }
 

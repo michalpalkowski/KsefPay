@@ -51,7 +51,10 @@ fn decode_nip(s: &str, ctx: &str) -> Result<Nip, RepositoryError> {
     })
 }
 
-fn parse_datetime(value: &str, field: &'static str) -> Result<chrono::DateTime<chrono::Utc>, RepositoryError> {
+fn parse_datetime(
+    value: &str,
+    field: &'static str,
+) -> Result<chrono::DateTime<chrono::Utc>, RepositoryError> {
     parse_sqlite_datetime(value, field).map_err(decode_error)
 }
 
