@@ -27,6 +27,7 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+argon2.workspace = true
 async-trait = "0.1"
 roxmltree = "0.20"
 bergshamra-c14n = "0.4"
