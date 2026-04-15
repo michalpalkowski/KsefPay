@@ -1,62 +1,53 @@
-# ksef-paymoney
+# KsefPay
 
-Integracja z polskim KSeF (Krajowy System e-Faktur) w Rust. Wysyłanie, odbieranie i zarządzanie e-fakturami przez KSeF API v2.0.
+Polish e-invoice (KSeF) integration in Rust. Send, receive, and manage VAT invoices through the national KSeF API v2.0.
 
-## Czym jest KSeF
+## What is KSeF
 
-KSeF to rządowy system e-faktur prowadzony przez Ministerstwo Finansów. Od 2026 roku każda firma w Polsce musi wysyłać faktury VAT przez KSeF — nie mailem, nie PDF-em, tylko jako podpisany i zaszyfrowany XML w formacie FA(3). KSeF nadaje każdej fakturze unikalny numer i przechowuje ją w centralnej bazie.
+KSeF (Krajowy System e-Faktur) is Poland's mandatory e-invoicing system run by the Ministry of Finance. Starting 2026, every company in Poland must submit VAT invoices as signed and encrypted FA(3) XML through the KSeF API.
 
-Ten projekt to **samodzielny serwer** do obsługi KSeF, celowany w jednoosobowe i mikro-firmy, które nie mają systemu ERP ani nie chcą płacić za SaaS do fakturowania. Wypełniasz formularz, aplikacja generuje FA(3) XML, szyfruje go (AES-256-CBC + RSA-OAEP), podpisuje sesję (XAdES-BES), wysyła do KSeF i śledzi status.
+KsefPay is a **standalone server** for micro and solo businesses that don't have an ERP and don't want to pay for invoicing SaaS. Fill out a form, the app generates FA(3) XML, encrypts it (AES-256-CBC + RSA-OAEP), signs the session (XAdES-BES), submits to KSeF, and tracks the status.
 
-## Architecture
+## Quick start
 
+```sh
+git clone https://github.com/michalpalkowski/KsefPay.git && cd KsefPay
+cp .env.example .env
+# .env defaults to PostgreSQL — for zero-dependency start, change to:
+#   DATABASE_URL=sqlite://./.data/ksef.db
+cargo run -p ksef-server
+# → http://localhost:3000
 ```
-ksef-core/       Library crate — domain, ports, services, infra
-ksef-server/     Axum + Askama web dashboard (standalone binary)
-```
 
-Clean architecture: `domain` ← `ports` ← `services` ← `infra` ← `server`.
-PostgreSQL for persistence. Background job worker for async KSeF operations.
+Migrations run automatically on startup. Certificates are auto-generated for `test`/`demo` environments.
+
+For PostgreSQL setup, Docker deployment, and detailed configuration see [Detailed setup](#detailed-setup).
 
 ## Dashboard
 
-SSR (Askama + Tailwind CSS), interfejs po polsku. Po uruchomieniu: `http://localhost:3000`.
+SSR web interface (Axum + Askama + Tailwind CSS).
 
-### Strona główna (`/`)
+<!-- TODO: add screenshot here -->
 
-Podsumowanie stanu faktur w systemie: ile szkiców czeka na wysłanie, ile jest w kolejce do KSeF, ile zaakceptowanych, ile z błędami. Daje szybki obraz tego, co wymaga uwagi.
+| Page | What it does |
+|---|---|
+| **Home** (`/`) | Invoice status summary — drafts, queued, accepted, errors |
+| **Invoices** (`/invoices`) | Outgoing (sent) and incoming (received) invoices with detail view |
+| **New invoice** (`/invoices/new`) | VAT invoice form — seller, buyer, line items, payment terms. Auto-calculates net/VAT/gross |
+| **Sessions** (`/sessions`) | KSeF authentication status. One click to start the full challenge → XAdES sign → poll → JWT flow |
+| **Permissions** (`/permissions`) | Grant/revoke access for other NIPs (e.g. accounting firm). 7 permission types |
+| **Tokens** (`/tokens`) | Generate/revoke API tokens as an alternative to certificate auth |
+| **Export** (`/export`) | Bulk export invoices from KSeF for a given period |
 
-### Faktury (`/invoices`)
+Submission to KSeF happens in the background — a job worker handles encryption, upload, retry with exponential backoff, and dead-letter queue for persistent failures.
 
-Dwie zakładki: **Wystawione** (faktury sprzedaży, które wysłałeś do KSeF) i **Otrzymane** (faktury zakupu pobrane z KSeF, np. od dostawców). Tabela pokazuje numer faktury, datę, kontrahenta, kwotę brutto, status i numer KSeF (nadawany po akceptacji).
+Fetching invoices (`/invoices/fetch`) pulls incoming invoices from KSeF for a selected period, parses FA(3) XML, and stores them locally. Idempotent — re-fetching updates existing records without duplicates.
 
-**Nowa faktura** (`/invoices/new`) — formularz do wystawienia faktury VAT. Wypełniasz dane sprzedawcy (NIP wstawiany z konfiguracji), nabywcy, pozycje (opis, ilość, cena netto, stawka VAT) i warunki płatności. Aplikacja generuje z tego XML w formacie FA(3) i zapisuje jako szkic. W tle liczy netto/VAT/brutto.
-
-**Wysyłka do KSeF** — na szczegółach faktury (status = draft) klikasz "Wyślij do KSeF". Faktura trafia do kolejki. Background worker automatycznie: otwiera sesję z KSeF, szyfruje XML kluczem publicznym ministerstwa, wysyła, odbiera numer KSeF i UPO (Urzędowe Poświadczenie Odbioru). Jeśli coś się nie powiedzie — retry z exponential backoff.
-
-**Pobieranie z KSeF** (`/invoices/fetch`) — ściąganie faktur zakupowych (lub własnych) z KSeF za wybrany okres. Np. "pobierz wszystkie faktury otrzymane w ostatnim miesiącu". Aplikacja odpytuje API KSeF, parsuje FA(3) XML każdej faktury i zapisuje w bazie. Idempotentne — powtórne pobranie aktualizuje istniejące, nie duplikuje.
-
-### Sesje (`/sessions`)
-
-KSeF wymaga uwierzytelnienia przed jakąkolwiek operacją. Flow: challenge → podpis XAdES certyfikatem → polling statusu → JWT token. Ta strona pokazuje czy masz aktywny token i otwartą sesję online. "Uwierzytelnij" startuje cały flow automatycznie. Na środowiskach test/demo certyfikat generuje się sam — nie musisz niczego konfigurować.
-
-### Uprawnienia (`/permissions`)
-
-KSeF ma system uprawnień — możesz nadać innemu NIP-owi (np. biurowi rachunkowemu) prawo do odczytu lub wystawiania faktur w Twoim imieniu. 7 typów uprawnień: odczyt faktur, wystawianie, zarządzanie uprawnieniami, introspekcja, podjednostki, odczyt uprawnień, operacje egzekucyjne. Tu możesz nadawać, odbierać i sprawdzać kto ma jakie uprawnienia do Twojego NIP-u.
-
-### Tokeny (`/tokens`)
-
-Alternatywa dla certyfikatu — możesz wygenerować token API z wybranymi uprawnieniami i używać go do uwierzytelniania (np. z innego systemu). Lista tokenów z ich statusem (aktywny/wygasły/unieważniony). Token raz unieważniony nie może być przywrócony.
-
-### Eksport (`/export`)
-
-Zbiorczy eksport faktur z KSeF za wybrany okres — przydatne do archiwizacji albo przekazania do biura rachunkowego. KSeF generuje plik asynchronicznie, aplikacja polluje status i udostępnia link do pobrania gdy gotowy.
-
-## Features (ksef-core)
+## Features
 
 **Invoices**
-- 12 invoice types: VAT, corrections (Kor), advance (Zal), split (Roz), simplified (Upr), proforma, and more
-- FA(3) XML generation and parsing
+- 12 invoice types: VAT, corrections, advance, split, simplified, proforma, and more
+- FA(3) XML generation and parsing (quick-xml, roxmltree)
 - AES-256-CBC + RSA-OAEP encryption
 - Background submission with retry + dead-letter queue
 - Fetch incoming invoices from KSeF (Subject2/Subject3 queries)
@@ -78,241 +69,112 @@ Zbiorczy eksport faktur z KSeF za wybrany okres — przydatne do archiwizacji al
 
 **Validated against real KSeF** — full E2E flow tested on `api-test.ksef.mf.gov.pl`.
 
-## Quick start (bez Docker Compose)
-
-Uruchamiamy lokalnie przez `cargo run`, a konfigurację trzymamy w `.env` (z automatycznym ładowaniem przez `mise`).
-
-### 0) Zainstaluj mise (jednorazowo)
-
-#### Ubuntu/Debian
-
-```sh
-curl https://mise.run | sh
-~/.local/bin/mise --version
-echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
-exec "$SHELL" -l
-```
-
-#### macOS
-
-```sh
-brew install mise
-mise --version
-echo 'eval "$(mise activate zsh)"' >> "${ZDOTDIR-$HOME}/.zshrc"
-exec "$SHELL" -l
-```
-
-### 1) Skonfiguruj env
-
-```sh
-cp .env.example .env
-```
-
-W `.env` ustaw przynajmniej:
+## Architecture
 
 ```
-# Wybierz JEDEN backend:
-# DATABASE_URL=sqlite://./.data/ksef.db
-# DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef
-
-KSEF_NIP=5260250274
+ksef-core/       Library crate — domain, ports, services, infra
+ksef-server/     Axum web server + Askama templates (standalone binary)
 ```
 
-### 2) Włącz automatyczne ładowanie `.env` przez mise
-
-W repo jest `mise.toml`:
-
-```toml
-[env]
-_.file = ".env"
-```
-
-Po jednorazowym `mise trust` zmienne z `.env` będą automatycznie dostępne w shellu po wejściu do katalogu projektu (podobnie do `direnv`).
-Jeśli nie używasz hooka shella do `mise`, uruchamiaj komendy przez `mise exec -- ...`.
-
-### 3) Wybierz backend bazy
-
-#### Opcja A: SQLite (najprostszy start lokalny)
-
-Nie wymaga osobnej instalacji serwera bazy. Ustaw:
-
-```sh
-DATABASE_URL=sqlite://./.data/ksef.db
-```
-
-Serwer utworzy plik DB i odpali migracje automatycznie.
-
-#### Opcja B: PostgreSQL
-
-#### Ubuntu/Debian
-
-```sh
-# instalacja (jednorazowo)
-sudo apt update
-sudo apt install -y postgresql postgresql-contrib postgresql-common postgresql-client
-
-# start klastra (codziennie po restarcie systemu, jeśli jest down)
-pg_lsclusters
-sudo pg_ctlcluster 16 main start   # podmień 16/main zgodnie z wynikiem pg_lsclusters
-```
-
-Jednorazowy setup użytkownika/bazy:
-
-```sh
-sudo -u postgres psql -d postgres <<'SQL'
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ksef') THEN
-    CREATE ROLE ksef LOGIN PASSWORD 'ksef';
-  END IF;
-END
-$$;
-ALTER ROLE ksef WITH LOGIN PASSWORD 'ksef';
-SQL
-
-sudo -u postgres createdb -O ksef ksef 2>/dev/null || true
-psql "postgres://ksef:ksef@localhost:5432/ksef" -c "select 1;"
-```
-
-#### macOS (Homebrew)
-
-```sh
-# instalacja (jednorazowo)
-brew install postgresql@16
-
-# start usługi
-brew services start postgresql@16
-```
-
-Jednorazowy setup użytkownika/bazy:
-
-```sh
-psql -d postgres <<'SQL'
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ksef') THEN
-    CREATE ROLE ksef LOGIN PASSWORD 'ksef';
-  END IF;
-END
-$$;
-ALTER ROLE ksef WITH LOGIN PASSWORD 'ksef';
-SQL
-
-createdb -O ksef ksef 2>/dev/null || true
-psql "postgres://ksef:ksef@localhost:5432/ksef" -c "select 1;"
-```
-
-Po tym setupie na co dzień wystarczy tylko upewnić się, że PostgreSQL działa.
-
-### 4) Wygeneruj testowy NIP (opcjonalnie)
-
-```sh
-cargo run -p ksef-core --example gen_nip
-# → 4583009462
-```
-
-### 5) Uruchom serwer
-
-```sh
-mise exec -- cargo run -p ksef-server
-```
-
-Dashboard: `http://localhost:3000`  
-Migracje uruchamiają się automatycznie przy starcie (SQLite i PostgreSQL).  
-Certyfikat jest auto-generowany dla środowisk `test` i `demo`.
-
-### Opcjonalnie: PostgreSQL przez Docker Compose
-
-Jeśli chcesz, możesz nadal postawić samą bazę przez:
-
-```sh
-docker compose up -d postgres
-```
-
-### KSeF sandbox setup
-
-Before sending invoices, the NIP must be registered on the KSeF test sandbox:
-
-```sh
-# Register test subject (idempotent — safe to run multiple times)
-cargo run -p ksef-core --example register_subject -- 4583009462
-```
-
-Well-known NIP `5260250274` (Ministerstwo Finansów) works out of the box on sandbox.
-
-## Configuration
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | yes | — | Database URL (`sqlite://...` or `postgres://...`) |
-| `KSEF_NIP` | yes | — | Your company NIP (10 digits) |
-| `KSEF_ENVIRONMENT` | no | `test` | `test`, `demo`, or `production` |
-| `KSEF_AUTH_METHOD` | no | `xades` | `xades` or `token` |
-| `KSEF_AUTH_TOKEN` | if token | — | Bootstrap token (when `auth_method=token`) |
-| `KSEF_CERT_PEM` | prod only | auto | Path to PEM certificate |
-| `KSEF_KEY_PEM` | prod only | auto | Path to PEM private key |
-| `SERVER_HOST` | no | `0.0.0.0` | Bind address |
-| `SERVER_PORT` | no | `3000` | HTTP port |
-| `RUST_LOG` | no | `info` | Log filter (`info,ksef_core=debug,ksef_server=debug`) |
-
-Certificate is auto-generated for `test`/`demo` environments.
-Production requires a qualified electronic signature or KSeF certificate (Type I from MCU).
-See [docs/test-cert-howto.md](docs/test-cert-howto.md) for details.
-
-## Tests
-
-```sh
-# Unit tests (~148 tests, no dependencies)
-cargo test -p ksef-core --lib
-
-# SQLite integration tests (no external DB required)
-cargo test -p ksef-core --test sqlite_integration
-
-# PostgreSQL integration tests (needs PostgreSQL running)
-cargo test -p ksef-core --test pg_integration
-
-# KSeF sandbox E2E (needs network + cert)
-KSEF_E2E_CERT_PEM=.tmp/cert.pem KSEF_E2E_KEY_PEM=.tmp/key.pem \
-  cargo test -p ksef-core --test ksef_e2e -- --ignored --nocapture --test-threads=1
-```
-
-E2E overrides: `KSEF_E2E_ENV`, `KSEF_E2E_NIP`.
-
-## Docker (production)
-
-```sh
-docker compose -f docker-compose.prod.yml up --build
-```
-
-Multi-stage build: `rust:1.92-bookworm` → `debian:bookworm-slim`. Final image contains the binary, templates, and assets.
-
-## Project structure
+Clean architecture with inward-pointing dependencies: `domain` ← `ports` ← `services` ← `infra` ← `server`.
 
 ```
 ksef-core/src/
-  domain/         Pure types: Invoice, Nip, Money, VatRate, auth, crypto, permissions, tokens
+  domain/         Pure types: Invoice, Nip, Money, VatRate, auth, crypto, permissions
   ports/          Trait interfaces (16): repos, KSeF client, encryption, transactions
   services/       Business logic (9): invoice, session, fetch, batch, permission, token, export, offline, QR
   infra/
-    pg/           PostgreSQL repos + transactional Db/Tx
+    pg/           PostgreSQL implementation
+    sqlite/       SQLite implementation
     crypto/       XAdES signing, AES+RSA encryption
     fa3/          FA(3) XML serialization and parsing
-    ksef/         HTTP clients for all KSeF API endpoints (14 modules)
+    ksef/         HTTP clients for KSeF API (14 endpoint modules)
+    http/         Rate limiter (token bucket), retry with exponential backoff
     batch/        ZIP archive builder
     qr/           QR code generation
-    http/         Rate limiter (token bucket), retry with exponential backoff
   workers/        Background job processor
 
 ksef-server/src/
   routes/         Axum handlers: dashboard, invoices, sessions, permissions, tokens, export, fetch
   templates/      Askama HTML templates (10 pages)
-  assets/         CSS
 ```
+
+Dual database backend — PostgreSQL and SQLite, selected via `DATABASE_URL`. Both share the same port traits and migration schema.
+
+## Tests
+
+```sh
+# Unit tests (313 tests, no external dependencies)
+cargo test -p ksef-core --lib
+
+# SQLite integration tests (no external DB needed)
+cargo test -p ksef-core --test sqlite_integration
+
+# PostgreSQL integration tests (needs running PostgreSQL)
+cargo test -p ksef-core --test pg_integration
+
+# KSeF sandbox E2E (needs network + certificate)
+KSEF_E2E_CERT_PEM=.tmp/cert.pem KSEF_E2E_KEY_PEM=.tmp/key.pem \
+  cargo test -p ksef-core --test ksef_e2e -- --ignored --nocapture --test-threads=1
+```
+
+## Detailed setup
+
+### Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | yes | — | `sqlite://...` or `postgres://...` |
+| `KSEF_ENVIRONMENT` | no | `test` | `test`, `demo`, or `production` |
+| `KSEF_CERT_PEM` | prod only | auto | Path or inline PEM certificate |
+| `KSEF_KEY_PEM` | prod only | auto | Path or inline PEM private key |
+| `SERVER_HOST` | no | `0.0.0.0` | Bind address |
+| `SERVER_PORT` | no | `3000` | HTTP port |
+| `RUST_LOG` | no | `info` | Log filter |
+
+### PostgreSQL setup
+
+```sh
+# Ubuntu/Debian
+sudo apt install -y postgresql postgresql-contrib
+sudo -u postgres psql -d postgres <<'SQL'
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ksef') THEN
+    CREATE ROLE ksef LOGIN PASSWORD 'ksef';
+  END IF;
+END $$;
+SQL
+sudo -u postgres createdb -O ksef ksef 2>/dev/null || true
+
+# macOS
+brew install postgresql@16
+brew services start postgresql@16
+createdb -O ksef ksef 2>/dev/null || true
+```
+
+### Docker (production)
+
+```sh
+docker compose -f docker-compose.prod.yml up --build
+```
+
+Multi-stage build: `rust:1.92-bookworm` → `debian:bookworm-slim`.
+
+### KSeF sandbox registration
+
+```sh
+# Register test subject (idempotent)
+cargo run -p ksef-core --example register_subject -- <YOUR_NIP>
+```
+
+Well-known NIP `5260250274` (Ministry of Finance) works out of the box on sandbox.
+
+For certificate generation see [docs/test-cert-howto.md](docs/test-cert-howto.md).
 
 ## Tech stack
 
-Rust 1.88+, Axum 0.8, Askama 0.15, sqlx (PostgreSQL 17), reqwest, OpenSSL, bergshamra-c14n (XAdES), thiserror, tokio, tracing.
+Rust 1.88+ · Axum 0.8 · Askama 0.15 · sqlx 0.8 (PostgreSQL + SQLite) · reqwest · OpenSSL · tokio · thiserror · tracing
 
 ## License
 
-MIT
+[MIT](LICENSE)
