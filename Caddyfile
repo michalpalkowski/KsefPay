@@ -1,0 +1,17 @@
+# KSeF Pay — Caddy reverse proxy with automatic HTTPS
+#
+# Usage:
+#   Local dev (self-signed):  caddy run
+#   Production (Let's Encrypt): DOMAIN=ksefpay.pl caddy run
+#
+# Install Caddy:
+#   Ubuntu: sudo apt install -y caddy
+#   macOS:  brew install caddy
+
+# --- Local development (localhost, self-signed cert) ---
+# Caddy auto-generates a trusted local CA cert.
+# First run: caddy trust (installs CA into system trust store)
+
+{$DOMAIN:localhost} {
+	reverse_proxy localhost:{$SERVER_PORT:3000}
+}

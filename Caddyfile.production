@@ -1,0 +1,25 @@
+# KSeF Pay — production Caddy config
+#
+# Automatic HTTPS via Let's Encrypt.
+# Requires: domain DNS pointing to this server's IP.
+#
+# Usage:
+#   DOMAIN=ksefpay.pl caddy run --config Caddyfile.production
+#   or: caddy run --config Caddyfile.production --envfile .env
+
+{$DOMAIN} {
+	reverse_proxy localhost:{$SERVER_PORT:3000}
+
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# Access log
+	log {
+		output file /var/log/caddy/ksefpay-access.log
+	}
+}
