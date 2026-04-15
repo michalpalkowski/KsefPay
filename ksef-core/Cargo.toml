@@ -38,6 +38,8 @@ uppsala = "0.3"
 tokio = { workspace = true, features = ["test-util"] }
 testcontainers.workspace = true
 testcontainers-modules.workspace = true
+wiremock = "0.6"
+anyhow = "1"
 
 [lints]
 workspace = true

@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use crate::domain::invoice::{InvoiceId, InvoiceStatus};
 use crate::domain::job::Job;
 use crate::domain::nip_account::NipAccountId;
+use crate::error::KSeFError;
 use crate::ports::encryption::InvoiceEncryptor;
 use crate::ports::invoice_xml::InvoiceXmlConverter;
 use crate::ports::job_queue::JobQueue;
@@ -209,11 +210,35 @@ impl JobWorker {
             .await
             .map_err(|e| format!("failed to ensure KSeF access token: {e}"))?;
 
-        let ksef_number = self
+        let ksef_number = match self
             .ksef_client
             .send_invoice(&token_pair.access_token, &session, &encrypted)
             .await
-            .map_err(|e| format!("failed to send invoice to KSeF: {e}"))?;
+        {
+            Ok(number) => number,
+            Err(err) => {
+                if let Some(code) = terminal_rejection_code(&err) {
+                    let rejection_reason = format!("KSeF invoice status {code}: {err}");
+                    self.invoice_service
+                        .mark_rejected(&invoice_id, &account_id, &rejection_reason)
+                        .await
+                        .map_err(|e| format!("failed to mark invoice rejected: {e}"))?;
+
+                    if let Err(close_err) = self.session_service.close_session(seller_nip).await {
+                        warn!(
+                            invoice_id = %invoice_id,
+                            session = %session,
+                            error = %close_err,
+                            "failed to close KSeF session after rejected invoice"
+                        );
+                    }
+
+                    return Ok(());
+                }
+
+                return Err(format!("failed to send invoice to KSeF: {err}"));
+            }
+        };
 
         info!(
             invoice_id = %invoice_id,
@@ -226,7 +251,36 @@ impl JobWorker {
             .await
             .map_err(|e| format!("failed to mark invoice accepted: {e}"))?;
 
+        // Finalize interactive session immediately so invoice becomes visible
+        // for downstream queries without waiting for another submission cycle.
+        if let Err(err) = self.session_service.close_session(seller_nip).await {
+            warn!(
+                invoice_id = %invoice_id,
+                session = %session,
+                error = %err,
+                "failed to close KSeF session after accepted invoice"
+            );
+        }
+
         Ok(())
+    }
+}
+
+fn terminal_rejection_code(err: &KSeFError) -> Option<i64> {
+    let KSeFError::InvoiceSubmissionFailed(message) = err else {
+        return None;
+    };
+    let code = message
+        .strip_prefix("invoice status code ")?
+        .split(':')
+        .next()?
+        .trim()
+        .parse::<i64>()
+        .ok()?;
+
+    match code {
+        410 | 430 | 435 | 450 => Some(code),
+        _ => None,
     }
 }
 
@@ -446,5 +500,67 @@ mod tests {
             .expect("worker should stop within 2 seconds")
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tick_terminal_ksef_rejection_marks_invoice_rejected() {
+        let repo = Arc::new(MockInvoiceRepo::new());
+        let queue = Arc::new(MockJobQueue::new());
+        let invoice_service = Arc::new(InvoiceService::new(repo.clone(), queue.clone()));
+        let auth = Arc::new(MockKSeFAuth::new());
+        let signer = Arc::new(MockXadesSigner);
+        let client = Arc::new(MockKSeFClient::new());
+        client.set_send_errors(vec![KSeFError::InvoiceSubmissionFailed(
+            "invoice status code 450: Błąd weryfikacji semantyki dokumentu faktury".to_string(),
+        )]);
+        let session_repo = Arc::new(MockSessionRepo::new());
+        let session_service = Arc::new(SessionService::new(
+            auth,
+            signer,
+            client.clone(),
+            session_repo,
+            KSeFEnvironment::Test,
+        ));
+        let encryptor = Arc::new(MockEncryptor);
+        let xml_converter = Arc::new(Fa3XmlConverter);
+        let worker = JobWorker::new(
+            queue.clone(),
+            invoice_service.clone(),
+            session_service,
+            client,
+            encryptor,
+            xml_converter,
+            Duration::from_millis(10),
+        );
+
+        let invoice = invoice_service
+            .create_draft(make_input(), test_account_id())
+            .await
+            .unwrap();
+        invoice_service
+            .submit(&invoice.id, &test_account_id())
+            .await
+            .unwrap();
+
+        worker.tick().await.unwrap();
+
+        let found = invoice_service
+            .find(&invoice.id, &test_account_id())
+            .await
+            .unwrap();
+        assert_eq!(
+            found.status,
+            crate::domain::invoice::InvoiceStatus::Rejected
+        );
+        assert!(
+            found
+                .ksef_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("450")
+        );
+
+        assert!(queue.list_pending().await.unwrap().is_empty());
+        assert!(queue.list_dead_letter().await.unwrap().is_empty());
     }
 }
