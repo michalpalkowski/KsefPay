@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::error::DomainError;
 
 use super::nip::Nip;
+use super::nip_account::NipAccountId;
 use super::session::KSeFNumber;
 
 /// Format an invoice number: `{prefix}/{year}/{month:02}/{seq:03}`.
@@ -838,6 +839,8 @@ pub struct LineItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Invoice {
     pub id: InvoiceId,
+    /// Owning NIP account — tenant isolation boundary.
+    pub nip_account_id: NipAccountId,
     pub direction: Direction,
     pub status: InvoiceStatus,
     pub invoice_type: InvoiceType,

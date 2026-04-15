@@ -294,10 +294,7 @@ async fn invoice_upsert_by_ksef_number_updates_existing() {
 
     assert_eq!(first_id.as_uuid(), second_id.as_uuid());
     let rows = repo
-        .list(&InvoiceFilter {
-            direction: Some(Direction::Outgoing),
-            ..Default::default()
-        })
+        .list(&InvoiceFilter::for_account(test_nip()).with_direction(Direction::Outgoing))
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -318,10 +315,7 @@ async fn invoice_list_filters_by_direction() {
     repo.save(&incoming).await.unwrap();
 
     let result = repo
-        .list(&InvoiceFilter {
-            direction: Some(Direction::Outgoing),
-            ..Default::default()
-        })
+        .list(&InvoiceFilter::for_account(test_nip()).with_direction(Direction::Outgoing))
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
@@ -341,13 +335,126 @@ async fn invoice_list_filters_by_status() {
     repo.save(&inv2).await.unwrap(); // stays Draft
 
     let result = repo
-        .list(&InvoiceFilter {
-            status: Some(InvoiceStatus::Queued),
-            ..Default::default()
-        })
+        .list(&InvoiceFilter::for_account(test_nip()).with_status(InvoiceStatus::Queued))
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
+}
+
+// ===========================================================================
+// Invoice Filter: account_nip tenant isolation
+// ===========================================================================
+
+#[tokio::test]
+async fn invoice_account_nip_filters_by_seller_or_buyer() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+    let nip_c = Nip::parse("7740001454").unwrap();
+
+    // Invoice 1: A sells to B
+    let mut inv1 = sample_invoice();
+    inv1.direction = Direction::Outgoing;
+    inv1.seller.nip = Some(nip_a.clone());
+    inv1.buyer.nip = Some(nip_b.clone());
+    repo.save(&inv1).await.unwrap();
+
+    // Invoice 2: C sells to A (A is buyer)
+    let mut inv2 = sample_invoice();
+    inv2.direction = Direction::Incoming;
+    inv2.seller.nip = Some(nip_c.clone());
+    inv2.buyer.nip = Some(nip_a.clone());
+    repo.save(&inv2).await.unwrap();
+
+    // Invoice 3: B sells to C (A is not involved)
+    let mut inv3 = sample_invoice();
+    inv3.direction = Direction::Outgoing;
+    inv3.seller.nip = Some(nip_b.clone());
+    inv3.buyer.nip = Some(nip_c.clone());
+    repo.save(&inv3).await.unwrap();
+
+    // Filter by account_nip = A → should see inv1 (seller) and inv2 (buyer), NOT inv3
+    let result = repo
+        .list(&InvoiceFilter::for_account(nip_a.clone()))
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 2);
+
+    // Filter by account_nip = C → should see inv2 (seller) and inv3 (buyer)
+    let result = repo
+        .list(&InvoiceFilter::for_account(nip_c))
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 2);
+
+    // Filter by account_nip = B → should see inv1 (buyer) and inv3 (seller)
+    let result = repo
+        .list(&InvoiceFilter::for_account(nip_b))
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 2);
+}
+
+#[tokio::test]
+async fn invoice_account_nip_combined_with_direction() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+
+    // Outgoing: A sells to B
+    let mut inv1 = sample_invoice();
+    inv1.direction = Direction::Outgoing;
+    inv1.seller.nip = Some(nip_a.clone());
+    inv1.buyer.nip = Some(nip_b.clone());
+    repo.save(&inv1).await.unwrap();
+
+    // Incoming: B sells to A
+    let mut inv2 = sample_invoice();
+    inv2.direction = Direction::Incoming;
+    inv2.seller.nip = Some(nip_b.clone());
+    inv2.buyer.nip = Some(nip_a.clone());
+    repo.save(&inv2).await.unwrap();
+
+    // account_nip=A + direction=Outgoing → only inv1
+    let result = repo
+        .list(&InvoiceFilter::for_account(nip_a.clone()).with_direction(Direction::Outgoing))
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].direction, Direction::Outgoing);
+
+    // account_nip=A + direction=Incoming → only inv2
+    let result = repo
+        .list(&InvoiceFilter::for_account(nip_a).with_direction(Direction::Incoming))
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].direction, Direction::Incoming);
+}
+
+#[tokio::test]
+async fn invoice_account_nip_returns_empty_for_uninvolved_nip() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+    let nip_unrelated = Nip::parse("7740001454").unwrap();
+
+    let mut inv = sample_invoice();
+    inv.seller.nip = Some(nip_a);
+    inv.buyer.nip = Some(nip_b);
+    repo.save(&inv).await.unwrap();
+
+    let result = repo
+        .list(&InvoiceFilter::for_account(nip_unrelated))
+        .await
+        .unwrap();
+    assert!(result.is_empty());
 }
 
 // ===========================================================================

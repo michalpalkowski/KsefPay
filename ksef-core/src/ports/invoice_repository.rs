@@ -6,14 +6,43 @@ use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 
 /// Filter criteria for listing invoices.
-#[derive(Debug, Default, Clone)]
+///
+/// `account_nip` is required — the type system enforces tenant isolation.
+/// Every query must specify which NIP's invoices to return.
+#[derive(Debug, Clone)]
 pub struct InvoiceFilter {
+    /// Tenant boundary: only invoices where this NIP is a party (seller or buyer).
+    pub account_nip: Nip,
     pub direction: Option<Direction>,
     pub status: Option<InvoiceStatus>,
-    pub nip_seller: Option<Nip>,
-    pub nip_buyer: Option<Nip>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+}
+
+impl InvoiceFilter {
+    /// Create a filter scoped to the given NIP account.
+    #[must_use]
+    pub fn for_account(nip: Nip) -> Self {
+        Self {
+            account_nip: nip,
+            direction: None,
+            status: None,
+            limit: None,
+            offset: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_direction(mut self, direction: Direction) -> Self {
+        self.direction = Some(direction);
+        self
+    }
+
+    #[must_use]
+    pub fn with_status(mut self, status: InvoiceStatus) -> Self {
+        self.status = Some(status);
+        self
+    }
 }
 
 /// Port: invoice persistence.

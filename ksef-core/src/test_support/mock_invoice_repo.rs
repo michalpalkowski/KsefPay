@@ -167,7 +167,9 @@ impl InvoiceRepository for MockInvoiceRepo {
         let mut result: Vec<Invoice> = store
             .iter()
             .filter(|inv| {
-                filter.direction.map_or(true, |d| inv.direction == d)
+                (inv.seller.nip.as_ref() == Some(&filter.account_nip)
+                    || inv.buyer.nip.as_ref() == Some(&filter.account_nip))
+                    && filter.direction.map_or(true, |d| inv.direction == d)
                     && filter.status.map_or(true, |s| inv.status == s)
             })
             .cloned()
@@ -271,10 +273,9 @@ mod tests {
         incoming.direction = crate::domain::invoice::Direction::Incoming;
         repo.save(&incoming).await.unwrap();
 
-        let filter = InvoiceFilter {
-            direction: Some(crate::domain::invoice::Direction::Outgoing),
-            ..Default::default()
-        };
+        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
+        let filter = InvoiceFilter::for_account(nip)
+            .with_direction(crate::domain::invoice::Direction::Outgoing);
         let result = repo.list(&filter).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(
@@ -292,11 +293,10 @@ mod tests {
             repo.save(&sample_invoice()).await.unwrap();
         }
 
-        let filter = InvoiceFilter {
-            limit: Some(2),
-            offset: Some(1),
-            ..Default::default()
-        };
+        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
+        let mut filter = InvoiceFilter::for_account(nip);
+        filter.limit = Some(2);
+        filter.offset = Some(1);
         let result = repo.list(&filter).await.unwrap();
         assert_eq!(result.len(), 2);
     }
@@ -305,7 +305,8 @@ mod tests {
     #[tokio::test]
     async fn list_empty_returns_empty() {
         let repo = MockInvoiceRepo::new();
-        let result = repo.list(&InvoiceFilter::default()).await.unwrap();
+        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
+        let result = repo.list(&InvoiceFilter::for_account(nip)).await.unwrap();
         assert!(result.is_empty());
     }
 }

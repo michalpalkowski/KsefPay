@@ -403,8 +403,10 @@ pub async fn list<'e>(
     exec: impl PgExecutor<'e>,
     filter: &InvoiceFilter,
 ) -> Result<Vec<Invoice>, RepositoryError> {
-    let mut query = String::from("SELECT * FROM invoices WHERE 1=1");
-    let mut param_idx = 1u32;
+    let mut query = String::from(
+        "SELECT * FROM invoices WHERE (seller_nip = $1 OR buyer_nip = $1)",
+    );
+    let mut param_idx = 2u32;
 
     if filter.direction.is_some() {
         write!(query, " AND direction = ${param_idx}").unwrap();
@@ -412,14 +414,7 @@ pub async fn list<'e>(
     }
     if filter.status.is_some() {
         write!(query, " AND status = ${param_idx}").unwrap();
-        param_idx += 1;
-    }
-    if filter.nip_seller.is_some() {
-        write!(query, " AND seller_nip = ${param_idx}").unwrap();
-        param_idx += 1;
-    }
-    if filter.nip_buyer.is_some() {
-        write!(query, " AND buyer_nip = ${param_idx}").unwrap();
+        let _ = param_idx;
     }
 
     query.push_str(" ORDER BY created_at DESC");
@@ -431,7 +426,8 @@ pub async fn list<'e>(
         write!(query, " OFFSET {offset}").unwrap();
     }
 
-    let mut q = sqlx::query_as::<_, InvoiceRow>(&query);
+    let mut q = sqlx::query_as::<_, InvoiceRow>(&query)
+        .bind(filter.account_nip.as_str().to_string());
 
     if let Some(ref d) = filter.direction {
         q = q.bind(d.to_string());
@@ -439,13 +435,6 @@ pub async fn list<'e>(
     if let Some(ref s) = filter.status {
         q = q.bind(s.to_string());
     }
-    if let Some(ref nip) = filter.nip_seller {
-        q = q.bind(nip.as_str().to_string());
-    }
-    if let Some(ref nip) = filter.nip_buyer {
-        q = q.bind(nip.as_str().to_string());
-    }
-
     let rows: Vec<InvoiceRow> = q.fetch_all(exec).await?;
     rows.into_iter().map(InvoiceRow::into_domain).collect()
 }

@@ -433,7 +433,10 @@ pub async fn list<'e>(
     exec: impl SqliteExecutor<'e>,
     filter: &InvoiceFilter,
 ) -> Result<Vec<Invoice>, RepositoryError> {
-    let mut qb: QueryBuilder<'_, Sqlite> = QueryBuilder::new("SELECT * FROM invoices WHERE 1=1");
+    let mut qb: QueryBuilder<'_, Sqlite> = QueryBuilder::new("SELECT * FROM invoices WHERE (seller_nip = ");
+    qb.push_bind(filter.account_nip.as_str());
+    qb.push(" OR buyer_nip = ").push_bind(filter.account_nip.as_str());
+    qb.push(")");
 
     if let Some(ref direction) = filter.direction {
         qb.push(" AND direction = ")
@@ -441,12 +444,6 @@ pub async fn list<'e>(
     }
     if let Some(ref status) = filter.status {
         qb.push(" AND status = ").push_bind(status.to_string());
-    }
-    if let Some(ref nip) = filter.nip_seller {
-        qb.push(" AND seller_nip = ").push_bind(nip.as_str());
-    }
-    if let Some(ref nip) = filter.nip_buyer {
-        qb.push(" AND buyer_nip = ").push_bind(nip.as_str());
     }
 
     qb.push(" ORDER BY datetime(created_at) DESC");

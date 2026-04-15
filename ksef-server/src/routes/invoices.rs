@@ -29,6 +29,7 @@ struct InvoiceListTemplate {
     outgoing: Vec<Invoice>,
     incoming: Vec<Invoice>,
     tab: String,
+    fetch_started: bool,
 }
 
 #[derive(Template)]
@@ -165,12 +166,14 @@ pub async fn list(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let nip_str = nip_ctx.account.nip.to_string();
-    let invoices = match state.invoice_service.list(&InvoiceFilter::default()).await {
+
+    let filter = InvoiceFilter::for_account(nip_ctx.account.nip);
+    let invoices = match state.invoice_service.list(&filter).await {
         Ok(invoices) => invoices,
         Err(err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Nie udalo sie pobrac listy faktur: {err}"),
+                format!("Nie udało się pobrać listy faktur: {err}"),
             )
                 .into_response();
         }
@@ -180,6 +183,8 @@ pub async fn list(
         .get("tab")
         .cloned()
         .unwrap_or_else(|| "outgoing".to_string());
+
+    let fetch_started = params.get("fetch").is_some_and(|v| v == "started");
 
     let (outgoing, incoming): (Vec<_>, Vec<_>) = invoices
         .into_iter()
@@ -192,6 +197,7 @@ pub async fn list(
         outgoing,
         incoming,
         tab,
+        fetch_started,
     })
 }
 
@@ -272,7 +278,7 @@ pub async fn detail(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("Nieprawidlowy identyfikator faktury: {id}"),
+                format!("Nieprawidłowy identyfikator faktury: {id}"),
             )
                 .into_response();
         }
@@ -288,7 +294,7 @@ pub async fn detail(
         .into_response(),
         Err(err) => (
             status_for_service_error(&err),
-            format!("Nie udalo sie pobrac faktury {invoice_id}: {err}"),
+            format!("Nie udało się pobrać faktury {invoice_id}: {err}"),
         )
             .into_response(),
     }
@@ -337,7 +343,7 @@ pub async fn create(
                         active: "/invoices",
                         nip_prefix: Some(nip_str),
                         user_email: nip_ctx.user.email,
-                        error: Some(format!("Blad generowania numeru faktury: {e}")),
+                        error: Some(format!("Błąd generowania numeru faktury: {e}")),
                         f: form_values,
                     },
                 );
@@ -357,7 +363,7 @@ pub async fn create(
                     active: "/invoices",
                     nip_prefix: Some(nip_str),
                     user_email: nip_ctx.user.email,
-                    error: Some(format!("Nie udalo sie utworzyc faktury: {e}")),
+                    error: Some(format!("Nie udało się utworzyć faktury: {e}")),
                     f: form_values,
                 },
             )
@@ -376,7 +382,7 @@ pub async fn submit(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("Nieprawidlowy identyfikator faktury: {id}"),
+                format!("Nieprawidłowy identyfikator faktury: {id}"),
             )
                 .into_response();
         }
@@ -388,7 +394,7 @@ pub async fn submit(
         }
         Err(err) => (
             status_for_service_error(&err),
-            format!("Nie udalo sie wyslac faktury {invoice_id} do kolejki: {err}"),
+            format!("Nie udało się wysłać faktury {invoice_id} do kolejki: {err}"),
         )
             .into_response(),
     }
@@ -475,7 +481,7 @@ fn parse_line_item(
     let ctx = format!("Pozycja {line_number}");
 
     let quantity =
-        Quantity::parse(quantity_raw).map_err(|e| format!("{ctx} — ilosc: {e}"))?;
+        Quantity::parse(quantity_raw).map_err(|e| format!("{ctx} — ilość: {e}"))?;
     let unit_price: Money = unit_price_raw
         .parse()
         .map_err(|e| format!("{ctx} — cena: {e}"))?;
@@ -641,7 +647,7 @@ mod tests {
         let mut form = base_form();
         form.item_quantity = "abc".to_string();
         let err = parse_form_to_input(form).unwrap_err();
-        assert!(err.contains("ilosc"), "unexpected error: {err}");
+        assert!(err.contains("ilość"), "unexpected error: {err}");
     }
 
     #[test]

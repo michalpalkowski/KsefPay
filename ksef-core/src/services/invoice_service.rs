@@ -444,7 +444,8 @@ mod tests {
         service.create_draft(make_input()).await.unwrap();
         service.create_draft(make_input()).await.unwrap();
 
-        let all = service.list(&InvoiceFilter::default()).await.unwrap();
+        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
+        let all = service.list(&InvoiceFilter::for_account(nip)).await.unwrap();
         assert_eq!(all.len(), 2);
     }
 
