@@ -1,9 +1,9 @@
 use askama::Template;
 use axum::Form;
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::Json;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -127,12 +127,16 @@ pub async fn fetch_execute(
     }
 
     let nip = nip_ctx.account.nip.clone();
+    let account_id = nip_ctx.account.id.clone();
     let fetch_service = state.fetch_service.clone();
     let fetch_jobs = state.fetch_jobs.clone();
     let job_key = nip_str.clone();
 
     tokio::spawn(async move {
-        match fetch_service.fetch_invoices(&nip, &query).await {
+        match fetch_service
+            .fetch_invoices(&nip, &account_id, &query)
+            .await
+        {
             Ok(result) => {
                 info!(
                     nip = %nip,
@@ -164,8 +168,7 @@ pub async fn fetch_execute(
         }
     });
 
-    Redirect::to(&format!("/accounts/{nip_str}/invoices?fetch=started"))
-        .into_response()
+    Redirect::to(&format!("/accounts/{nip_str}/invoices?fetch=started")).into_response()
 }
 
 /// JSON endpoint for polling fetch job status.

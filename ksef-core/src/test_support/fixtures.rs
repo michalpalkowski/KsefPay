@@ -5,6 +5,7 @@ use crate::domain::invoice::{
     LineItem, Money, Party, PaymentMethod, Quantity, VatRate,
 };
 use crate::domain::nip::Nip;
+use crate::domain::nip_account::NipAccountId;
 
 /// Build a minimal valid invoice for testing.
 #[must_use]
@@ -14,6 +15,7 @@ pub fn sample_invoice() -> Invoice {
 
     Invoice {
         id: InvoiceId::new(),
+        nip_account_id: NipAccountId::from_uuid(uuid::Uuid::from_u128(1)),
         direction: Direction::Outgoing,
         status: InvoiceStatus::Draft,
         invoice_type: InvoiceType::Vat,

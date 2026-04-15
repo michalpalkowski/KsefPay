@@ -64,6 +64,7 @@ fn sample_invoice() -> Invoice {
 
     Invoice {
         id: InvoiceId::new(),
+        nip_account_id: test_account_id(),
         direction: Direction::Outgoing,
         status: InvoiceStatus::Draft,
         invoice_type: InvoiceType::Vat,
@@ -114,6 +115,28 @@ fn sample_invoice() -> Invoice {
         ksef_error: None,
         raw_xml: None,
     }
+}
+
+fn test_account_id() -> NipAccountId {
+    NipAccountId::from_uuid(Uuid::from_u128(1))
+}
+
+fn account_id_a() -> NipAccountId {
+    NipAccountId::from_uuid(Uuid::from_u128(11))
+}
+
+fn account_id_b() -> NipAccountId {
+    NipAccountId::from_uuid(Uuid::from_u128(12))
+}
+
+fn account_id_c() -> NipAccountId {
+    NipAccountId::from_uuid(Uuid::from_u128(13))
+}
+
+async fn create_account_with_id(repo: &Db, id: NipAccountId, nip: Nip) {
+    let mut account = make_nip_account(&nip);
+    account.id = id;
+    NipAccountRepository::create(repo, &account).await.unwrap();
 }
 
 fn make_job(job_type: &str) -> Job {
@@ -219,11 +242,14 @@ async fn migrations_run_three_times_without_error() {
 async fn invoice_save_and_find_by_id() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
 
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+        .await
+        .unwrap();
     assert_eq!(found.id.as_uuid(), invoice.id.as_uuid());
     assert_eq!(found.invoice_number, invoice.invoice_number);
     assert_eq!(found.payment_method, Some(PaymentMethod::Transfer));
@@ -233,7 +259,10 @@ async fn invoice_save_and_find_by_id() {
 async fn invoice_find_by_id_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let err = InvoiceRepository::find_by_id(&repo, &InvoiceId::new()).await.unwrap_err();
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
+    let err = InvoiceRepository::find_by_id(&repo, &InvoiceId::new(), &test_account_id())
+        .await
+        .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 
@@ -241,6 +270,7 @@ async fn invoice_find_by_id_not_found() {
 async fn invoice_save_duplicate_returns_error() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
     let invoice = sample_invoice();
     repo.save(&invoice).await.unwrap();
     let err = repo.save(&invoice).await.unwrap_err();
@@ -251,10 +281,15 @@ async fn invoice_save_duplicate_returns_error() {
 async fn invoice_update_status() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
-    repo.update_status(&id, InvoiceStatus::Queued).await.unwrap();
-    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
+    repo.update_status(&id, InvoiceStatus::Queued)
+        .await
+        .unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+        .await
+        .unwrap();
     assert_eq!(found.status, InvoiceStatus::Queued);
 }
 
@@ -262,10 +297,13 @@ async fn invoice_update_status() {
 async fn invoice_set_ksef_number() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
     repo.set_ksef_number(&id, "KSeF-12345").await.unwrap();
-    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+        .await
+        .unwrap();
     assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-12345");
 }
 
@@ -273,10 +311,13 @@ async fn invoice_set_ksef_number() {
 async fn invoice_set_ksef_error() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
     repo.set_ksef_error(&id, "timeout").await.unwrap();
-    let found = InvoiceRepository::find_by_id(&repo, &id).await.unwrap();
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+        .await
+        .unwrap();
     assert_eq!(found.ksef_error.as_deref(), Some("timeout"));
 }
 
@@ -284,6 +325,7 @@ async fn invoice_set_ksef_error() {
 async fn invoice_upsert_by_ksef_number_updates_existing() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
 
     let mut invoice = sample_invoice();
     invoice.ksef_number = Some(KSeFNumber::new("KSeF-SQLITE-001".to_string()));
@@ -294,7 +336,7 @@ async fn invoice_upsert_by_ksef_number_updates_existing() {
 
     assert_eq!(first_id.as_uuid(), second_id.as_uuid());
     let rows = repo
-        .list(&InvoiceFilter::for_account(test_nip()).with_direction(Direction::Outgoing))
+        .list(&InvoiceFilter::for_account(test_account_id()).with_direction(Direction::Outgoing))
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -305,6 +347,7 @@ async fn invoice_upsert_by_ksef_number_updates_existing() {
 async fn invoice_list_filters_by_direction() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
 
     let mut outgoing = sample_invoice();
     outgoing.direction = Direction::Outgoing;
@@ -315,7 +358,7 @@ async fn invoice_list_filters_by_direction() {
     repo.save(&incoming).await.unwrap();
 
     let result = repo
-        .list(&InvoiceFilter::for_account(test_nip()).with_direction(Direction::Outgoing))
+        .list(&InvoiceFilter::for_account(test_account_id()).with_direction(Direction::Outgoing))
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
@@ -326,110 +369,110 @@ async fn invoice_list_filters_by_direction() {
 async fn invoice_list_filters_by_status() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    create_account_with_id(&repo, test_account_id(), test_nip()).await;
 
     let inv = sample_invoice();
     let id = repo.save(&inv).await.unwrap();
-    repo.update_status(&id, InvoiceStatus::Queued).await.unwrap();
+    repo.update_status(&id, InvoiceStatus::Queued)
+        .await
+        .unwrap();
 
     let inv2 = sample_invoice();
     repo.save(&inv2).await.unwrap(); // stays Draft
 
     let result = repo
-        .list(&InvoiceFilter::for_account(test_nip()).with_status(InvoiceStatus::Queued))
+        .list(&InvoiceFilter::for_account(test_account_id()).with_status(InvoiceStatus::Queued))
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
 }
 
 // ===========================================================================
-// Invoice Filter: account_nip tenant isolation
+// Invoice Filter: account_id tenant isolation
 // ===========================================================================
 
 #[tokio::test]
-async fn invoice_account_nip_filters_by_seller_or_buyer() {
+async fn invoice_account_id_filters_by_owner() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
 
     let nip_a = Nip::parse("5260250274").unwrap();
     let nip_b = Nip::parse("1060000062").unwrap();
     let nip_c = Nip::parse("7740001454").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a.clone()).await;
+    create_account_with_id(&repo, account_id_b(), nip_b.clone()).await;
+    create_account_with_id(&repo, account_id_c(), nip_c.clone()).await;
 
-    // Invoice 1: A sells to B
+    // Invoice 1 belongs to account A
     let mut inv1 = sample_invoice();
-    inv1.direction = Direction::Outgoing;
-    inv1.seller.nip = Some(nip_a.clone());
-    inv1.buyer.nip = Some(nip_b.clone());
+    inv1.nip_account_id = account_id_a();
     repo.save(&inv1).await.unwrap();
 
-    // Invoice 2: C sells to A (A is buyer)
+    // Invoice 2 belongs to account C
     let mut inv2 = sample_invoice();
-    inv2.direction = Direction::Incoming;
-    inv2.seller.nip = Some(nip_c.clone());
-    inv2.buyer.nip = Some(nip_a.clone());
+    inv2.nip_account_id = account_id_c();
     repo.save(&inv2).await.unwrap();
 
-    // Invoice 3: B sells to C (A is not involved)
+    // Invoice 3 belongs to account B
     let mut inv3 = sample_invoice();
-    inv3.direction = Direction::Outgoing;
-    inv3.seller.nip = Some(nip_b.clone());
-    inv3.buyer.nip = Some(nip_c.clone());
+    inv3.nip_account_id = account_id_b();
     repo.save(&inv3).await.unwrap();
 
-    // Filter by account_nip = A → should see inv1 (seller) and inv2 (buyer), NOT inv3
+    // Filter by account_id=A → only inv1
     let result = repo
-        .list(&InvoiceFilter::for_account(nip_a.clone()))
+        .list(&InvoiceFilter::for_account(account_id_a()))
         .await
         .unwrap();
-    assert_eq!(result.len(), 2);
+    assert_eq!(result.len(), 1);
 
-    // Filter by account_nip = C → should see inv2 (seller) and inv3 (buyer)
+    // Filter by account_id=C → only inv2
     let result = repo
-        .list(&InvoiceFilter::for_account(nip_c))
+        .list(&InvoiceFilter::for_account(account_id_c()))
         .await
         .unwrap();
-    assert_eq!(result.len(), 2);
+    assert_eq!(result.len(), 1);
 
-    // Filter by account_nip = B → should see inv1 (buyer) and inv3 (seller)
+    // Filter by account_id=B → only inv3
     let result = repo
-        .list(&InvoiceFilter::for_account(nip_b))
+        .list(&InvoiceFilter::for_account(account_id_b()))
         .await
         .unwrap();
-    assert_eq!(result.len(), 2);
+    assert_eq!(result.len(), 1);
 }
 
 #[tokio::test]
-async fn invoice_account_nip_combined_with_direction() {
+async fn invoice_account_id_combined_with_direction() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
 
     let nip_a = Nip::parse("5260250274").unwrap();
     let nip_b = Nip::parse("1060000062").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a.clone()).await;
+    create_account_with_id(&repo, account_id_b(), nip_b.clone()).await;
 
-    // Outgoing: A sells to B
+    // Outgoing invoice in account A
     let mut inv1 = sample_invoice();
     inv1.direction = Direction::Outgoing;
-    inv1.seller.nip = Some(nip_a.clone());
-    inv1.buyer.nip = Some(nip_b.clone());
+    inv1.nip_account_id = account_id_a();
     repo.save(&inv1).await.unwrap();
 
-    // Incoming: B sells to A
+    // Incoming invoice in account A
     let mut inv2 = sample_invoice();
     inv2.direction = Direction::Incoming;
-    inv2.seller.nip = Some(nip_b.clone());
-    inv2.buyer.nip = Some(nip_a.clone());
+    inv2.nip_account_id = account_id_a();
     repo.save(&inv2).await.unwrap();
 
-    // account_nip=A + direction=Outgoing → only inv1
+    // account_id=A + direction=Outgoing → only inv1
     let result = repo
-        .list(&InvoiceFilter::for_account(nip_a.clone()).with_direction(Direction::Outgoing))
+        .list(&InvoiceFilter::for_account(account_id_a()).with_direction(Direction::Outgoing))
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].direction, Direction::Outgoing);
 
-    // account_nip=A + direction=Incoming → only inv2
+    // account_id=A + direction=Incoming → only inv2
     let result = repo
-        .list(&InvoiceFilter::for_account(nip_a).with_direction(Direction::Incoming))
+        .list(&InvoiceFilter::for_account(account_id_a()).with_direction(Direction::Incoming))
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
@@ -437,21 +480,23 @@ async fn invoice_account_nip_combined_with_direction() {
 }
 
 #[tokio::test]
-async fn invoice_account_nip_returns_empty_for_uninvolved_nip() {
+async fn invoice_account_id_returns_empty_for_unrelated_account() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
 
     let nip_a = Nip::parse("5260250274").unwrap();
     let nip_b = Nip::parse("1060000062").unwrap();
     let nip_unrelated = Nip::parse("7740001454").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a.clone()).await;
+    create_account_with_id(&repo, account_id_b(), nip_b.clone()).await;
+    create_account_with_id(&repo, account_id_c(), nip_unrelated).await;
 
     let mut inv = sample_invoice();
-    inv.seller.nip = Some(nip_a);
-    inv.buyer.nip = Some(nip_b);
+    inv.nip_account_id = account_id_a();
     repo.save(&inv).await.unwrap();
 
     let result = repo
-        .list(&InvoiceFilter::for_account(nip_unrelated))
+        .list(&InvoiceFilter::for_account(account_id_c()))
         .await
         .unwrap();
     assert!(result.is_empty());
@@ -648,7 +693,9 @@ async fn user_find_by_email() {
     let user = make_user("bob@example.com");
     UserRepository::create(&repo, &user).await.unwrap();
 
-    let found = UserRepository::find_by_email(&repo, "bob@example.com").await.unwrap();
+    let found = UserRepository::find_by_email(&repo, "bob@example.com")
+        .await
+        .unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().email, "bob@example.com");
 }
@@ -657,7 +704,9 @@ async fn user_find_by_email() {
 async fn user_find_by_email_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let found = UserRepository::find_by_email(&repo, "nobody@example.com").await.unwrap();
+    let found = UserRepository::find_by_email(&repo, "nobody@example.com")
+        .await
+        .unwrap();
     assert!(found.is_none());
 }
 
@@ -665,7 +714,9 @@ async fn user_find_by_email_not_found() {
 async fn user_find_by_id_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let err = UserRepository::find_by_id(&repo, &UserId::new()).await.unwrap_err();
+    let err = UserRepository::find_by_id(&repo, &UserId::new())
+        .await
+        .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 
@@ -687,8 +738,12 @@ async fn user_different_emails_both_succeed() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
 
-    UserRepository::create(&repo, &make_user("a@example.com")).await.unwrap();
-    UserRepository::create(&repo, &make_user("b@example.com")).await.unwrap();
+    UserRepository::create(&repo, &make_user("a@example.com"))
+        .await
+        .unwrap();
+    UserRepository::create(&repo, &make_user("b@example.com"))
+        .await
+        .unwrap();
 }
 
 // ===========================================================================
@@ -717,7 +772,9 @@ async fn nip_account_find_by_nip() {
     let account = make_nip_account(&test_nip());
     NipAccountRepository::create(&repo, &account).await.unwrap();
 
-    let found = NipAccountRepository::find_by_nip(&repo, &test_nip()).await.unwrap();
+    let found = NipAccountRepository::find_by_nip(&repo, &test_nip())
+        .await
+        .unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().nip.as_str(), "5260250274");
 }
@@ -726,7 +783,9 @@ async fn nip_account_find_by_nip() {
 async fn nip_account_find_by_nip_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let found = NipAccountRepository::find_by_nip(&repo, &other_nip()).await.unwrap();
+    let found = NipAccountRepository::find_by_nip(&repo, &other_nip())
+        .await
+        .unwrap();
     assert!(found.is_none());
 }
 
@@ -739,7 +798,9 @@ async fn nip_account_duplicate_nip_returns_error() {
     NipAccountRepository::create(&repo, &acc1).await.unwrap();
 
     let acc2 = make_nip_account(&test_nip());
-    let err = NipAccountRepository::create(&repo, &acc2).await.unwrap_err();
+    let err = NipAccountRepository::create(&repo, &acc2)
+        .await
+        .unwrap_err();
     assert!(matches!(err, RepositoryError::Duplicate { .. }));
 }
 
@@ -753,12 +814,19 @@ async fn nip_account_update_credentials() {
 
     account.ksef_auth_method = KSeFAuthMethod::Token;
     account.ksef_auth_token = Some("my-token".to_string());
-    account.cert_pem = Some(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----".to_vec());
-    account.key_pem = Some(b"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----".to_vec());
+    account.cert_pem =
+        Some(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----".to_vec());
+    account.key_pem =
+        Some(b"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----".to_vec());
     account.cert_auto_generated = true;
-    NipAccountRepository::update_credentials(&repo, &account).await.unwrap();
+    NipAccountRepository::update_credentials(&repo, &account)
+        .await
+        .unwrap();
 
-    let found = NipAccountRepository::find_by_nip(&repo, &test_nip()).await.unwrap().unwrap();
+    let found = NipAccountRepository::find_by_nip(&repo, &test_nip())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(found.ksef_auth_method, KSeFAuthMethod::Token);
     assert_eq!(found.ksef_auth_token.as_deref(), Some("my-token"));
     assert!(found.cert_pem.is_some());
@@ -837,13 +905,23 @@ async fn access_revoke_removes_access() {
     db.grant_access(&user_id, &acc_id).await.unwrap();
 
     // Verify access exists
-    assert!(db.has_access(&user_id, &test_nip()).await.unwrap().is_some());
+    assert!(
+        db.has_access(&user_id, &test_nip())
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     // Revoke
     db.revoke_access(&user_id, &acc_id).await.unwrap();
 
     // Verify access gone
-    assert!(db.has_access(&user_id, &test_nip()).await.unwrap().is_none());
+    assert!(
+        db.has_access(&user_id, &test_nip())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(db.list_by_user(&user_id).await.unwrap().is_empty());
 }
 
@@ -864,7 +942,12 @@ async fn access_isolation_between_users() {
     // Only Alice gets access
     db.grant_access(&alice_id, &acc_id).await.unwrap();
 
-    assert!(db.has_access(&alice_id, &test_nip()).await.unwrap().is_some());
+    assert!(
+        db.has_access(&alice_id, &test_nip())
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(db.has_access(&bob_id, &test_nip()).await.unwrap().is_none());
 
     assert_eq!(db.list_by_user(&alice_id).await.unwrap().len(), 1);
@@ -888,7 +971,12 @@ async fn access_multiple_users_same_nip() {
     db.grant_access(&bob_id, &acc_id).await.unwrap();
 
     // Both have access
-    assert!(db.has_access(&alice_id, &test_nip()).await.unwrap().is_some());
+    assert!(
+        db.has_access(&alice_id, &test_nip())
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(db.has_access(&bob_id, &test_nip()).await.unwrap().is_some());
 }
 

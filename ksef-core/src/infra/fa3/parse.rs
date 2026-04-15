@@ -6,6 +6,7 @@ use crate::domain::invoice::{
     InvoiceType, LineItem, Money, Party, PaymentMethod, Quantity, VatRate,
 };
 use crate::domain::nip::Nip;
+use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::domain::xml::InvoiceXml;
 use crate::error::XmlError;
@@ -54,6 +55,8 @@ pub fn xml_to_invoice(
 
     Ok(Invoice {
         id: InvoiceId::new(),
+        // Caller is responsible for assigning the real tenant account before persistence.
+        nip_account_id: NipAccountId::new(),
         direction,
         status: InvoiceStatus::Fetched,
         invoice_type,

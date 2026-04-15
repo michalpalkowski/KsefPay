@@ -118,7 +118,12 @@ pub async fn close_session(State(state): State<AppState>, nip_ctx: NipContext) -
 mod tests {
     use super::*;
 
-    fn test_template(has_token: bool, has_session: bool, error: Option<String>, success: Option<String>) -> SessionsTemplate {
+    fn test_template(
+        has_token: bool,
+        has_session: bool,
+        error: Option<String>,
+        success: Option<String>,
+    ) -> SessionsTemplate {
         SessionsTemplate {
             active: "/sessions",
             nip_prefix: Some("5260250274".to_string()),
@@ -157,7 +162,7 @@ mod tests {
     fn template_token_only_shows_correct_message() {
         let tmpl = test_template(true, false, None, None);
         let html = tmpl.render().unwrap();
-        assert!(html.contains("Sesja online otwiera sie automatycznie"));
+        assert!(html.contains("Sesja online otwiera się automatycznie"));
         assert!(html.contains("Odnow token"));
     }
 }

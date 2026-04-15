@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
+use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -49,11 +50,15 @@ impl InvoiceRepository for MockInvoiceRepo {
         Ok(id)
     }
 
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
         let store = self.invoices.lock().unwrap();
         store
             .iter()
-            .find(|i| i.id.as_uuid() == id.as_uuid())
+            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
             .cloned()
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
@@ -138,6 +143,7 @@ impl InvoiceRepository for MockInvoiceRepo {
                 .is_some_and(|n| n.as_str() == ksef_num.as_str())
         }) {
             // Update all fields except id and status (don't regress status)
+            existing.nip_account_id = invoice.nip_account_id.clone();
             existing.direction = invoice.direction;
             existing.invoice_number = invoice.invoice_number.clone();
             existing.issue_date = invoice.issue_date;
@@ -167,8 +173,7 @@ impl InvoiceRepository for MockInvoiceRepo {
         let mut result: Vec<Invoice> = store
             .iter()
             .filter(|inv| {
-                (inv.seller.nip.as_ref() == Some(&filter.account_nip)
-                    || inv.buyer.nip.as_ref() == Some(&filter.account_nip))
+                inv.nip_account_id == filter.account_id
                     && filter.direction.map_or(true, |d| inv.direction == d)
                     && filter.status.map_or(true, |s| inv.status == s)
             })
@@ -188,7 +193,13 @@ impl InvoiceRepository for MockInvoiceRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
+
     use crate::test_support::fixtures::sample_invoice;
+
+    fn test_account_id() -> NipAccountId {
+        NipAccountId::from_uuid(Uuid::from_u128(1))
+    }
 
     /// Contract test: save then find_by_id returns the same invoice.
     #[tokio::test]
@@ -197,7 +208,7 @@ mod tests {
         let invoice = sample_invoice();
         let id = repo.save(&invoice).await.unwrap();
 
-        let found = repo.find_by_id(&id).await.unwrap();
+        let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
         assert_eq!(found.id.as_uuid(), invoice.id.as_uuid());
         assert_eq!(found.invoice_number, invoice.invoice_number);
     }
@@ -207,7 +218,10 @@ mod tests {
     async fn find_by_id_not_found() {
         let repo = MockInvoiceRepo::new();
         let missing_id = InvoiceId::new();
-        let err = repo.find_by_id(&missing_id).await.unwrap_err();
+        let err = repo
+            .find_by_id(&missing_id, &test_account_id())
+            .await
+            .unwrap_err();
         assert!(matches!(err, RepositoryError::NotFound { .. }));
     }
 
@@ -232,7 +246,7 @@ mod tests {
             .await
             .unwrap();
 
-        let found = repo.find_by_id(&id).await.unwrap();
+        let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Queued);
     }
 
@@ -256,7 +270,7 @@ mod tests {
 
         repo.set_ksef_number(&id, "KSeF-12345").await.unwrap();
 
-        let found = repo.find_by_id(&id).await.unwrap();
+        let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
         assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-12345");
     }
 
@@ -273,8 +287,7 @@ mod tests {
         incoming.direction = crate::domain::invoice::Direction::Incoming;
         repo.save(&incoming).await.unwrap();
 
-        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
-        let filter = InvoiceFilter::for_account(nip)
+        let filter = InvoiceFilter::for_account(outgoing.nip_account_id.clone())
             .with_direction(crate::domain::invoice::Direction::Outgoing);
         let result = repo.list(&filter).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -293,8 +306,7 @@ mod tests {
             repo.save(&sample_invoice()).await.unwrap();
         }
 
-        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
-        let mut filter = InvoiceFilter::for_account(nip);
+        let mut filter = InvoiceFilter::for_account(test_account_id());
         filter.limit = Some(2);
         filter.offset = Some(1);
         let result = repo.list(&filter).await.unwrap();
@@ -305,8 +317,10 @@ mod tests {
     #[tokio::test]
     async fn list_empty_returns_empty() {
         let repo = MockInvoiceRepo::new();
-        let nip = crate::domain::nip::Nip::parse("5260250274").unwrap();
-        let result = repo.list(&InvoiceFilter::for_account(nip)).await.unwrap();
+        let result = repo
+            .list(&InvoiceFilter::for_account(test_account_id()))
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 }

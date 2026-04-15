@@ -23,7 +23,11 @@ struct DashboardTemplate {
 
 pub async fn dashboard(State(state): State<AppState>, nip_ctx: NipContext) -> Response {
     let nip_str = nip_ctx.account.nip.to_string();
-    let all = match state.invoice_service.list(&InvoiceFilter::for_account(nip_ctx.account.nip)).await {
+    let all = match state
+        .invoice_service
+        .list(&InvoiceFilter::for_account(nip_ctx.account.id.clone()))
+        .await
+    {
         Ok(invoices) => invoices,
         Err(err) => {
             return (

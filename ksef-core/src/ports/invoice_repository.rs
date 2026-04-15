@@ -1,18 +1,18 @@
 use async_trait::async_trait;
 
 use crate::domain::invoice::{Direction, Invoice, InvoiceId, InvoiceStatus};
-use crate::domain::nip::Nip;
+use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 
 /// Filter criteria for listing invoices.
 ///
-/// `account_nip` is required — the type system enforces tenant isolation.
-/// Every query must specify which NIP's invoices to return.
+/// `account_id` is required — the type system enforces tenant isolation.
+/// Every query must specify which account's invoices to return.
 #[derive(Debug, Clone)]
 pub struct InvoiceFilter {
-    /// Tenant boundary: only invoices where this NIP is a party (seller or buyer).
-    pub account_nip: Nip,
+    /// Tenant boundary: only invoices belonging to this NIP account.
+    pub account_id: NipAccountId,
     pub direction: Option<Direction>,
     pub status: Option<InvoiceStatus>,
     pub limit: Option<u32>,
@@ -22,9 +22,9 @@ pub struct InvoiceFilter {
 impl InvoiceFilter {
     /// Create a filter scoped to the given NIP account.
     #[must_use]
-    pub fn for_account(nip: Nip) -> Self {
+    pub fn for_account(account_id: NipAccountId) -> Self {
         Self {
-            account_nip: nip,
+            account_id,
             direction: None,
             status: None,
             limit: None,
@@ -50,7 +50,11 @@ impl InvoiceFilter {
 pub trait InvoiceRepository: Send + Sync {
     async fn save(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError>;
 
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError>;
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError>;
 
     async fn update_status(
         &self,

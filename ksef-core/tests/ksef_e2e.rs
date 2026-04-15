@@ -91,6 +91,7 @@ fn load_e2e_signer_from_env() -> OpenSslXadesSigner {
 
 mod fixtures {
     use ksef_core::domain::invoice::*;
+    use ksef_core::domain::nip_account::NipAccountId;
 
     /// A test invoice using the E2E NIP from env (or default sandbox NIP).
     pub fn test_invoice() -> Invoice {
@@ -99,6 +100,7 @@ mod fixtures {
 
         Invoice {
             id: InvoiceId::new(),
+            nip_account_id: NipAccountId::from_uuid(uuid::Uuid::from_u128(1)),
             direction: Direction::Outgoing,
             status: InvoiceStatus::Draft,
             invoice_type: InvoiceType::Vat,

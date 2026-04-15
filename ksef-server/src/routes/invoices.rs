@@ -7,8 +7,8 @@ use chrono::{Datelike, NaiveDate};
 use serde::Deserialize;
 
 use ksef_core::domain::invoice::{
-    format_invoice_number, Address, CountryCode, Currency, Direction, Invoice, InvoiceId,
-    InvoiceType, LineItem, Money, Party, PaymentMethod, Quantity, VatRate,
+    Address, CountryCode, Currency, Direction, Invoice, InvoiceId, InvoiceType, LineItem, Money,
+    Party, PaymentMethod, Quantity, VatRate, format_invoice_number,
 };
 use ksef_core::domain::nip::Nip;
 use ksef_core::error::RepositoryError;
@@ -167,7 +167,7 @@ pub async fn list(
 ) -> impl IntoResponse {
     let nip_str = nip_ctx.account.nip.to_string();
 
-    let filter = InvoiceFilter::for_account(nip_ctx.account.nip);
+    let filter = InvoiceFilter::for_account(nip_ctx.account.id.clone());
     let invoices = match state.invoice_service.list(&filter).await {
         Ok(invoices) => invoices,
         Err(err) => {
@@ -234,10 +234,7 @@ fn new_form_defaults(nip_ctx: &NipContext) -> InvoiceNewTemplate {
     }
 }
 
-pub async fn new_form(
-    State(state): State<AppState>,
-    nip_ctx: NipContext,
-) -> impl IntoResponse {
+pub async fn new_form(State(state): State<AppState>, nip_ctx: NipContext) -> impl IntoResponse {
     let mut tmpl = new_form_defaults(&nip_ctx);
 
     // Auto-fill seller data from Biała Lista cache
@@ -284,7 +281,11 @@ pub async fn detail(
         }
     };
 
-    match state.invoice_service.find(&invoice_id).await {
+    match state
+        .invoice_service
+        .find(&invoice_id, &nip_ctx.account.id)
+        .await
+    {
         Ok(invoice) => render(InvoiceDetailTemplate {
             active: "/invoices",
             nip_prefix: Some(nip_ctx.account.nip.to_string()),
@@ -351,7 +352,11 @@ pub async fn create(
         }
     }
 
-    match state.invoice_service.create_draft(input).await {
+    match state
+        .invoice_service
+        .create_draft(input, nip_ctx.account.id.clone())
+        .await
+    {
         Ok(invoice) => {
             Redirect::to(&format!("/accounts/{nip_str}/invoices/{}", invoice.id)).into_response()
         }
@@ -388,7 +393,11 @@ pub async fn submit(
         }
     };
 
-    match state.invoice_service.submit(&invoice_id).await {
+    match state
+        .invoice_service
+        .submit(&invoice_id, &nip_ctx.account.id)
+        .await
+    {
         Ok(()) => {
             Redirect::to(&format!("/accounts/{nip_str}/invoices/{invoice_id}")).into_response()
         }
@@ -480,8 +489,7 @@ fn parse_line_item(
 ) -> Result<LineItem, String> {
     let ctx = format!("Pozycja {line_number}");
 
-    let quantity =
-        Quantity::parse(quantity_raw).map_err(|e| format!("{ctx} — ilość: {e}"))?;
+    let quantity = Quantity::parse(quantity_raw).map_err(|e| format!("{ctx} — ilość: {e}"))?;
     let unit_price: Money = unit_price_raw
         .parse()
         .map_err(|e| format!("{ctx} — cena: {e}"))?;
@@ -497,8 +505,7 @@ fn parse_line_item(
         Some(pct) => {
             let vat_numerator = i128::from(net_grosze) * i128::from(pct);
             let rounded = div_round_half_away_from_zero(vat_numerator, 100);
-            i64::try_from(rounded)
-                .map_err(|_| format!("{ctx} — wartosc VAT przekracza zakres"))?
+            i64::try_from(rounded).map_err(|_| format!("{ctx} — wartosc VAT przekracza zakres"))?
         }
         None => 0,
     };

@@ -52,6 +52,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/007_security_hardening.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -97,8 +102,12 @@ impl InvoiceRepository for Db {
     async fn save(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         queries::invoice::save(&self.pool, invoice).await
     }
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
-        queries::invoice::find_by_id(&self.pool, id).await
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
+        queries::invoice::find_by_id(&self.pool, id, account_id).await
     }
     async fn update_status(
         &self,
@@ -313,10 +322,14 @@ impl InvoiceRepository for Tx {
         let tx = guard.as_mut().unwrap();
         queries::invoice::save(&mut **tx, invoice).await
     }
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::find_by_id(&mut **tx, id).await
+        queries::invoice::find_by_id(&mut **tx, id, account_id).await
     }
     async fn update_status(
         &self,
