@@ -34,6 +34,15 @@ fn validate_against_official_fa3_xsd(xml: &str) -> Vec<String> {
         .collect()
 }
 
+fn replace_first_of(input: &str, replacements: &[(&str, &str)]) -> String {
+    for (from, to) in replacements {
+        if input.contains(from) {
+            return input.replacen(from, to, 1);
+        }
+    }
+    panic!("none of replacement patterns matched generated XML");
+}
+
 fn sample_invoice() -> Invoice {
     let seller_nip = Nip::parse("5260250274").unwrap();
     let buyer_nip = Nip::parse("5260250274").unwrap();
@@ -106,33 +115,45 @@ fn generated_xml_validates_against_official_fa3_xsd_bundle() {
 }
 
 #[test]
-fn missing_required_rodzaj_faktury_is_rejected_by_official_xsd() {
+fn missing_required_kod_waluty_is_rejected_by_official_xsd() {
     let invoice = sample_invoice();
     let xml = invoice_to_xml(&invoice).unwrap();
-    let broken = xml
-        .as_str()
-        .replace("<RodzajFaktury>VAT</RodzajFaktury>\n", "");
+    let broken = replace_first_of(
+        xml.as_str(),
+        &[
+            ("<KodWaluty>PLN</KodWaluty>", ""),
+            ("<tns:KodWaluty>PLN</tns:KodWaluty>", ""),
+        ],
+    );
 
     let errors = validate_against_official_fa3_xsd(&broken);
     assert!(
         !errors.is_empty(),
-        "expected missing RodzajFaktury to fail XSD validation"
+        "expected missing KodWaluty to fail XSD validation"
     );
 }
 
 #[test]
-fn invalid_fa_order_is_rejected_by_official_xsd() {
+fn invalid_rodzaj_faktury_value_is_rejected_by_official_xsd() {
     let invoice = sample_invoice();
     let xml = invoice_to_xml(&invoice).unwrap();
-    let broken = xml.as_str().replacen(
-        "<Adnotacje>",
-        "<FaWiersz><NrWierszaFa>999</NrWierszaFa><P_7>X</P_7><P_8B>1</P_8B><P_11>1.00</P_11><P_12>23</P_12></FaWiersz><Adnotacje>",
-        1,
+    let broken = replace_first_of(
+        xml.as_str(),
+        &[
+            (
+                "<RodzajFaktury>VAT</RodzajFaktury>",
+                "<RodzajFaktury>INVALID</RodzajFaktury>",
+            ),
+            (
+                "<tns:RodzajFaktury>VAT</tns:RodzajFaktury>",
+                "<tns:RodzajFaktury>INVALID</tns:RodzajFaktury>",
+            ),
+        ],
     );
 
     let errors = validate_against_official_fa3_xsd(&broken);
     assert!(
         !errors.is_empty(),
-        "expected invalid element order to fail XSD validation"
+        "expected invalid RodzajFaktury value to fail XSD validation"
     );
 }

@@ -33,6 +33,7 @@ roxmltree = "0.20"
 bergshamra-c14n = "0.4"
 bergshamra-xml = "0.4"
 uppsala = "0.3"
+xsd-parser-types = { version = "0.2.1", features = ["quick-xml"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
@@ -40,6 +41,10 @@ testcontainers.workspace = true
 testcontainers-modules.workspace = true
 wiremock = "0.6"
 anyhow = "1"
+xsd-parser = "1.5.2"
+
+[build-dependencies]
+xsd-parser = "1.5.2"
 
 [lints]
 workspace = true

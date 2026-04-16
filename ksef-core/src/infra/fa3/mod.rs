@@ -1,5 +1,8 @@
+mod generated;
+mod model_converter;
 mod parse;
 mod serialize;
+mod versioned_adapter;
 mod xsd_validator;
 
 use crate::domain::invoice::{Direction, Invoice};
@@ -10,6 +13,7 @@ use crate::ports::invoice_xml::InvoiceXmlConverter;
 
 pub use parse::xml_to_invoice;
 pub use serialize::invoice_to_xml;
+pub use versioned_adapter::{current_adapter as current_fa3_adapter, Fa3VersionAdapter};
 pub use xsd_validator::Fa3XsdValidator;
 
 /// FA(3) adapter implementing the XML conversion port.
