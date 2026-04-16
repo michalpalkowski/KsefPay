@@ -27,53 +27,151 @@ use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
 use crate::ports::user_repository::UserRepository;
 
 /// Run all SQLite migrations against the given pool.
+///
+/// Uses `PRAGMA user_version` to track the highest applied migration so each
+/// migration runs exactly once.  For databases created before version tracking
+/// was introduced the function bootstraps the version from the live schema.
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/001_initial_schema.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/002_fetched_status_and_raw_xml.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/003_invoice_type_and_corrections.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/004_nullable_payment_fields.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/005_multi_tenant_auth.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/006_company_cache_and_invoice_sequences.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/007_security_hardening.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/008_nip_account_tokens.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/sqlite/009_invoice_composite_ksef_key.sql"
-    ))
-    .execute(pool)
-    .await?;
+    let stored: i64 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(pool)
+        .await?;
+    let version = if stored == 0 {
+        detect_applied_version(pool).await?
+    } else {
+        stored
+    };
+
+    if version < 1 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/001_initial_schema.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 1")
+            .execute(pool)
+            .await?;
+    }
+    if version < 2 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/002_fetched_status_and_raw_xml.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 2")
+            .execute(pool)
+            .await?;
+    }
+    if version < 3 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/003_invoice_type_and_corrections.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 3")
+            .execute(pool)
+            .await?;
+    }
+    if version < 4 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/004_nullable_payment_fields.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 4")
+            .execute(pool)
+            .await?;
+    }
+    if version < 5 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/005_multi_tenant_auth.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 5")
+            .execute(pool)
+            .await?;
+    }
+    if version < 6 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/006_company_cache_and_invoice_sequences.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 6")
+            .execute(pool)
+            .await?;
+    }
+    if version < 7 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/007_security_hardening.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 7")
+            .execute(pool)
+            .await?;
+    }
+    if version < 8 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/008_nip_account_tokens.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 8")
+            .execute(pool)
+            .await?;
+    }
+    if version < 9 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/009_invoice_composite_ksef_key.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 9")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
+}
+
+/// Infer the applied migration version for databases created before
+/// `PRAGMA user_version` tracking was introduced.
+async fn detect_applied_version(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    // Migration 009: composite UNIQUE on invoices
+    let invoice_sql: Option<String> = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'invoices'",
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    match &invoice_sql {
+        None => return Ok(0), // fresh database — no tables yet
+        Some(sql) if sql.contains("UNIQUE (ksef_number, nip_account_id)") => return Ok(9),
+        _ => {}
+    }
+
+    // Migration 008: nip_account_tokens table
+    let has_tokens: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'nip_account_tokens'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_tokens {
+        return Ok(8);
+    }
+
+    // Migration 007: audit_log table
+    let has_audit: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_audit {
+        return Ok(7);
+    }
+
+    // Migrations 001–006 use IF NOT EXISTS throughout and are idempotent.
+    Ok(6)
 }
 
 /// SQLite database handle. Implements all repository/queue/session ports.
