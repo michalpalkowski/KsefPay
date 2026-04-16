@@ -11,7 +11,7 @@ use crate::ports::invoice_repository::InvoiceRepository;
 use crate::ports::invoice_xml::InvoiceXmlConverter;
 use crate::ports::ksef_client::KSeFClient;
 use crate::services::session_service::{SessionService, SessionServiceError};
-use tracing::warn;
+use tracing::{debug, warn};
 
 const QUERY_RATE_LIMIT_MAX_RETRIES: u32 = 3;
 const MIN_RATE_LIMIT_WAIT_MS: u64 = 1_000;
@@ -169,6 +169,22 @@ impl FetchService {
         ksef_number: &KSeFNumber,
         direction: Direction,
     ) -> Result<bool, ProcessError> {
+        // Cache hit: do not fetch/parse XML again for invoices already persisted
+        // for this account. We still treat this as "updated/existing" in counters.
+        let existing = self
+            .repo
+            .find_by_ksef_number_and_account(ksef_number, account_id)
+            .await
+            .map_err(ProcessError::Database)?;
+        if existing.is_some() {
+            debug!(
+                ksef_number = %ksef_number,
+                account_id = ?account_id,
+                "invoice already cached locally; skipping re-fetch"
+            );
+            return Ok(true);
+        }
+
         let untrusted_xml = self
             .ksef_client
             .fetch_invoice(access_token, ksef_number)
@@ -187,20 +203,12 @@ impl FetchService {
             .map_err(ProcessError::Parse)?;
         invoice.nip_account_id = account_id.clone();
 
-        let existing = self
-            .repo
-            .find_by_ksef_number_and_account(ksef_number, account_id)
-            .await
-            .map_err(ProcessError::Database)?;
-
-        let was_update = existing.is_some();
-
         self.repo
             .upsert_by_ksef_number(&invoice)
             .await
             .map_err(ProcessError::Database)?;
 
-        Ok(was_update)
+        Ok(false)
     }
 }
 
