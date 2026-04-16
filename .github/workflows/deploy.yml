@@ -28,7 +28,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push (linux/arm64 for Synology DS223)
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
