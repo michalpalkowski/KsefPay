@@ -18,6 +18,7 @@
   {% endif %}
 
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="form-stack">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       <div class="form-group">
         <label for="date_from">Data od</label>
@@ -41,8 +42,8 @@
       <label>Szybki wybor</label>
       <div class="preset-buttons">
         <button type="button" onclick="setPreset('today')">Dzisiaj</button>
-        <button type="button" onclick="setPreset('week')">Ostatni tydzien</button>
-        <button type="button" onclick="setPreset('month')">Ostatni miesiac</button>
+        <button type="button" onclick="setPreset('week')">Ostatni tydzień</button>
+        <button type="button" onclick="setPreset('month')">Ostatni miesiąc</button>
       </div>
     </div>
 

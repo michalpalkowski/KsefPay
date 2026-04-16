@@ -90,6 +90,7 @@ mod tests {
         LineItem, Money, Party, Quantity, VatRate,
     };
     use crate::domain::nip::Nip;
+    use crate::domain::nip_account::NipAccountId;
     use crate::infra::qr::generator::QRCodeGenerator;
 
     fn qr_service() -> QRService {
@@ -100,6 +101,7 @@ mod tests {
         let nip = Nip::parse("5260250274").unwrap();
         Invoice {
             id: InvoiceId::new(),
+            nip_account_id: NipAccountId::from_uuid(uuid::Uuid::from_u128(1)),
             direction: Direction::Outgoing,
             status: InvoiceStatus::Draft,
             invoice_type: InvoiceType::Vat,

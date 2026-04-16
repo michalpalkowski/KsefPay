@@ -23,10 +23,7 @@ struct NipLookupResponse {
     vat_status: Option<String>,
 }
 
-pub async fn nip_lookup(
-    State(state): State<AppState>,
-    Path(raw_nip): Path<String>,
-) -> Response {
+pub async fn nip_lookup(State(state): State<AppState>, Path(raw_nip): Path<String>) -> Response {
     let nip = match Nip::parse(&raw_nip) {
         Ok(nip) => nip,
         Err(_) => {

@@ -40,53 +40,6 @@ impl HttpKSeFPermissions {
         }
     }
 
-    async fn grant_permissions_testdata(
-        &self,
-        access_token: &AccessToken,
-        request: &PermissionGrantRequest,
-    ) -> Result<(), KSeFError> {
-        let url = format!("{}/testdata/permissions", self.http.base_url);
-        let request_nonce = Utc::now().timestamp_nanos_opt().map_or_else(
-            || Utc::now().timestamp_millis().to_string(),
-            |v| v.to_string(),
-        );
-        let permission_list: Vec<Value> = request
-            .permissions
-            .iter()
-            .enumerate()
-            .map(|(idx, permission)| {
-                serde_json::json!({
-                    "description": format!("grant-{request_nonce}-{idx}-{permission}"),
-                    "permissionType": permission.to_string(),
-                })
-            })
-            .collect();
-        let body = serde_json::json!({
-            "contextIdentifier": {
-                "type": "Nip",
-                "value": request.context_nip.as_str(),
-            },
-            "authorizedIdentifier": {
-                "type": "Nip",
-                "value": request.authorized_nip.as_str(),
-            },
-            "permissions": permission_list,
-        });
-
-        self.http
-            .send(RateLimitCategory::Session, || {
-                self.http
-                    .client
-                    .post(&url)
-                    .bearer_auth(access_token.as_str())
-                    .json(&body)
-                    .send()
-            })
-            .await?;
-
-        Ok(())
-    }
-
     async fn grant_permissions_persons_grants(
         &self,
         access_token: &AccessToken,
@@ -136,6 +89,65 @@ impl HttpKSeFPermissions {
             .ok_or_else(|| {
                 KSeFError::StatusQueryFailed(
                     "permissions grant response missing referenceNumber/reference".to_string(),
+                )
+            })?
+            .to_string();
+
+        self.wait_for_permissions_operation(access_token, &reference_number)
+            .await
+    }
+
+    async fn grant_permissions_entities_grants(
+        &self,
+        access_token: &AccessToken,
+        request: &PermissionGrantRequest,
+    ) -> Result<(), KSeFError> {
+        let url = format!("{}/permissions/entities/grants", self.http.base_url);
+        let request_nonce = Utc::now().timestamp_nanos_opt().map_or_else(
+            || Utc::now().timestamp_millis().to_string(),
+            |v| v.to_string(),
+        );
+        let permissions: Vec<Value> = request
+            .permissions
+            .iter()
+            .map(|permission| {
+                serde_json::json!({
+                    "type": permission.to_string(),
+                    "canDelegate": false,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "subjectIdentifier": {
+                "type": "Nip",
+                "value": request.authorized_nip.as_str(),
+            },
+            "permissions": permissions,
+            "description": format!("fallback-entity-grant-{request_nonce}"),
+            "subjectDetails": {
+                "fullName": format!("Podmiot {}", request.authorized_nip),
+            }
+        });
+
+        let response = self
+            .http
+            .send(RateLimitCategory::Session, || {
+                self.http
+                    .client
+                    .post(&url)
+                    .bearer_auth(access_token.as_str())
+                    .json(&body)
+                    .send()
+            })
+            .await?;
+        let payload: Value = response.json().await.map_err(|e| {
+            KSeFError::StatusQueryFailed(format!("parse entity permissions grant response: {e}"))
+        })?;
+        let reference_number = str_by_keys(&payload, &["referenceNumber", "reference"])
+            .ok_or_else(|| {
+                KSeFError::StatusQueryFailed(
+                    "entity permissions grant response missing referenceNumber/reference"
+                        .to_string(),
                 )
             })?
             .to_string();
@@ -201,14 +213,6 @@ impl HttpKSeFPermissions {
     }
 }
 
-fn is_server_side_error(error: &KSeFError) -> bool {
-    match error {
-        KSeFError::ApiError(detail) => detail.status_code >= 500,
-        KSeFError::HttpError { status, .. } => *status >= 500,
-        _ => false,
-    }
-}
-
 fn parse_permission_type(raw: &str) -> Result<PermissionType, KSeFError> {
     raw.parse::<PermissionType>().map_err(|_| {
         KSeFError::StatusQueryFailed(format!("invalid permission type in response: '{raw}'"))
@@ -270,18 +274,19 @@ impl KSeFPermissions for HttpKSeFPermissions {
         access_token: &AccessToken,
         request: &PermissionGrantRequest,
     ) -> Result<(), KSeFError> {
-        match self.grant_permissions_testdata(access_token, request).await {
-            Ok(()) => Ok(()),
-            Err(testdata_error) if is_server_side_error(&testdata_error) => {
-                self.grant_permissions_persons_grants(access_token, request)
-                    .await
-                    .map_err(|fallback_error| {
-                        KSeFError::StatusQueryFailed(format!(
-                            "permissions grant failed: testdata={testdata_error}; fallback={fallback_error}"
-                        ))
-                    })
-            }
-            Err(err) => Err(err),
+        let all_entity_permissions = request.permissions.iter().all(|permission| {
+            matches!(
+                permission,
+                PermissionType::InvoiceRead | PermissionType::InvoiceWrite
+            )
+        });
+
+        if all_entity_permissions {
+            self.grant_permissions_entities_grants(access_token, request)
+                .await
+        } else {
+            self.grant_permissions_persons_grants(access_token, request)
+                .await
         }
     }
 

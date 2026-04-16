@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
 
+use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
@@ -11,12 +12,15 @@ use crate::domain::job::{Job, JobId};
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
+use crate::domain::token_mgmt::LocalToken;
 use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
+use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use crate::ports::invoice_sequence::InvoiceSequenceRepository;
 use crate::ports::job_queue::JobQueue;
+use crate::ports::local_token_repository::LocalTokenRepository;
 use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
@@ -54,6 +58,21 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/007_security_hardening.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/008_nip_account_tokens.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/009_invoice_composite_ksef_key.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -88,8 +107,12 @@ impl InvoiceRepository for Db {
         queries::invoice::save(&self.pool, invoice).await
     }
 
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
-        queries::invoice::find_by_id(&self.pool, id).await
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
+        queries::invoice::find_by_id(&self.pool, id, account_id).await
     }
 
     async fn update_status(
@@ -117,6 +140,15 @@ impl InvoiceRepository for Db {
         ksef_number: &KSeFNumber,
     ) -> Result<Option<Invoice>, RepositoryError> {
         queries::invoice::find_by_ksef_number(&self.pool, ksef_number).await
+    }
+
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, account_id)
+            .await
     }
 
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
@@ -218,10 +250,14 @@ impl InvoiceRepository for Tx {
         queries::invoice::save(&mut **tx, invoice).await
     }
 
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::find_by_id(&mut **tx, id).await
+        queries::invoice::find_by_id(&mut **tx, id, account_id).await
     }
 
     async fn update_status(
@@ -257,6 +293,17 @@ impl InvoiceRepository for Tx {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::invoice::find_by_ksef_number(&mut **tx, ksef_number).await
+    }
+
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, account_id)
+            .await
     }
 
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
@@ -359,6 +406,21 @@ impl SessionRepository for Tx {
 }
 
 #[async_trait]
+impl AuditLogRepository for Tx {
+    async fn log(&self, entry: &NewAuditLogEntry) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::audit::log(&mut **tx, entry).await
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AuditLogEntry>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::audit::list_recent(&mut **tx, limit).await
+    }
+}
+
+#[async_trait]
 impl UserRepository for Db {
     async fn create(&self, user: &User) -> Result<UserId, RepositoryError> {
         queries::user::create(&self.pool, user).await
@@ -423,6 +485,17 @@ impl CompanyCacheRepository for Db {
     }
     async fn set(&self, info: &CompanyInfo) -> Result<(), RepositoryError> {
         queries::company_cache::set(&self.pool, info).await
+    }
+}
+
+#[async_trait]
+impl AuditLogRepository for Db {
+    async fn log(&self, entry: &NewAuditLogEntry) -> Result<(), RepositoryError> {
+        queries::audit::log(&self.pool, entry).await
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AuditLogEntry>, RepositoryError> {
+        queries::audit::list_recent(&self.pool, limit).await
     }
 }
 
@@ -554,5 +627,31 @@ impl AtomicScopeFactory for Db {
         Ok(Box::new(Tx {
             inner: Mutex::new(Some(transaction)),
         }))
+    }
+}
+
+#[async_trait]
+impl LocalTokenRepository for Db {
+    async fn save(&self, token: &LocalToken) -> Result<(), RepositoryError> {
+        queries::local_token::save(&self.pool, token).await
+    }
+
+    async fn list_by_account(
+        &self,
+        account_id: &NipAccountId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        queries::local_token::list_by_account(&self.pool, account_id).await
+    }
+
+    async fn list_by_account_for_user(
+        &self,
+        account_id: &NipAccountId,
+        user_id: &UserId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        queries::local_token::list_by_account_for_user(&self.pool, account_id, user_id).await
+    }
+
+    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError> {
+        queries::local_token::mark_revoked(&self.pool, ksef_token_id).await
     }
 }

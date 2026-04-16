@@ -1,8 +1,9 @@
+pub mod audit;
 pub mod auth;
 pub mod batch;
-pub mod company;
 pub mod certificate;
 pub mod certificate_mgmt;
+pub mod company;
 pub mod crypto;
 pub mod environment;
 pub mod export;

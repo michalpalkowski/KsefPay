@@ -45,7 +45,6 @@ struct WlResult {
 #[serde(rename_all = "camelCase")]
 struct WlSubject {
     name: String,
-    nip: String,
     status_vat: Option<String>,
     working_address: Option<String>,
     residence_address: Option<String>,
@@ -121,7 +120,6 @@ mod tests {
     fn parse_subject_maps_all_fields() {
         let subject = WlSubject {
             name: "FIRMA SP. Z O.O.".to_string(),
-            nip: "5260250274".to_string(),
             status_vat: Some("Czynny".to_string()),
             working_address: Some("ul. Testowa 1, 00-001 Warszawa".to_string()),
             residence_address: None,
@@ -141,7 +139,6 @@ mod tests {
     fn parse_subject_falls_back_to_residence_address() {
         let subject = WlSubject {
             name: "Test".to_string(),
-            nip: "5260250274".to_string(),
             status_vat: None,
             working_address: None,
             residence_address: Some("ul. Domowa 5".to_string()),

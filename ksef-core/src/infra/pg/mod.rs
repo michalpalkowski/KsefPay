@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::Mutex;
 
+use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
@@ -11,12 +12,15 @@ use crate::domain::job::{Job, JobId};
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
+use crate::domain::token_mgmt::LocalToken;
 use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
+use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use crate::ports::invoice_sequence::InvoiceSequenceRepository;
 use crate::ports::job_queue::JobQueue;
+use crate::ports::local_token_repository::LocalTokenRepository;
 use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
@@ -49,6 +53,21 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../migrations/006_company_cache_and_invoice_sequences.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/007_security_hardening.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/008_nip_account_tokens.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/009_invoice_composite_ksef_key.sql"
     ))
     .execute(pool)
     .await?;
@@ -97,8 +116,12 @@ impl InvoiceRepository for Db {
     async fn save(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         queries::invoice::save(&self.pool, invoice).await
     }
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
-        queries::invoice::find_by_id(&self.pool, id).await
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
+        queries::invoice::find_by_id(&self.pool, id, account_id).await
     }
     async fn update_status(
         &self,
@@ -122,6 +145,14 @@ impl InvoiceRepository for Db {
         ksef_number: &KSeFNumber,
     ) -> Result<Option<Invoice>, RepositoryError> {
         queries::invoice::find_by_ksef_number(&self.pool, ksef_number).await
+    }
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, account_id)
+            .await
     }
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         queries::invoice::upsert_by_ksef_number(&self.pool, invoice).await
@@ -273,6 +304,43 @@ impl CompanyCacheRepository for Db {
     }
 }
 
+#[async_trait]
+impl AuditLogRepository for Db {
+    async fn log(&self, entry: &NewAuditLogEntry) -> Result<(), RepositoryError> {
+        queries::audit::log(&self.pool, entry).await
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AuditLogEntry>, RepositoryError> {
+        queries::audit::list_recent(&self.pool, limit).await
+    }
+}
+
+#[async_trait]
+impl LocalTokenRepository for Db {
+    async fn save(&self, token: &LocalToken) -> Result<(), RepositoryError> {
+        queries::local_token::save(&self.pool, token).await
+    }
+
+    async fn list_by_account(
+        &self,
+        account_id: &NipAccountId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        queries::local_token::list_by_account(&self.pool, account_id).await
+    }
+
+    async fn list_by_account_for_user(
+        &self,
+        account_id: &NipAccountId,
+        user_id: &UserId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        queries::local_token::list_by_account_for_user(&self.pool, account_id, user_id).await
+    }
+
+    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError> {
+        queries::local_token::mark_revoked(&self.pool, ksef_token_id).await
+    }
+}
+
 // =========================================================================
 // Tx — transaction scope, same traits, automatic rollback on drop
 // =========================================================================
@@ -313,10 +381,14 @@ impl InvoiceRepository for Tx {
         let tx = guard.as_mut().unwrap();
         queries::invoice::save(&mut **tx, invoice).await
     }
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError> {
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::find_by_id(&mut **tx, id).await
+        queries::invoice::find_by_id(&mut **tx, id, account_id).await
     }
     async fn update_status(
         &self,
@@ -348,6 +420,16 @@ impl InvoiceRepository for Tx {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::invoice::find_by_ksef_number(&mut **tx, ksef_number).await
+    }
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, account_id)
+            .await
     }
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         let mut guard = self.conn().await;
@@ -441,6 +523,21 @@ impl SessionRepository for Tx {
     }
 }
 
+#[async_trait]
+impl AuditLogRepository for Tx {
+    async fn log(&self, entry: &NewAuditLogEntry) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::audit::log(&mut **tx, entry).await
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AuditLogEntry>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::audit::list_recent(&mut **tx, limit).await
+    }
+}
+
 // --- Tx: UserRepository ---
 
 #[async_trait]
@@ -522,6 +619,40 @@ impl NipAccountRepository for Tx {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::nip_account::has_access(&mut **tx, user_id, nip).await
+    }
+}
+
+#[async_trait]
+impl LocalTokenRepository for Tx {
+    async fn save(&self, token: &LocalToken) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::local_token::save(&mut **tx, token).await
+    }
+
+    async fn list_by_account(
+        &self,
+        account_id: &NipAccountId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::local_token::list_by_account(&mut **tx, account_id).await
+    }
+
+    async fn list_by_account_for_user(
+        &self,
+        account_id: &NipAccountId,
+        user_id: &UserId,
+    ) -> Result<Vec<LocalToken>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::local_token::list_by_account_for_user(&mut **tx, account_id, user_id).await
+    }
+
+    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::local_token::mark_revoked(&mut **tx, ksef_token_id).await
     }
 }
 

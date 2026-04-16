@@ -19,6 +19,7 @@
 <div class="page-card">
   <h2>Wygeneruj nowy token</h2>
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/generate" class="form-stack" id="token-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <input type="hidden" name="permissions" id="permissions-value" value="InvoiceRead" />
     <div class="form-group">
       <label>Uprawnienia</label>
@@ -83,23 +84,32 @@
     <thead>
       <tr>
         <th>ID</th>
+        <th>Opis</th>
         <th>Status</th>
         <th>Utworzony</th>
-        <th>Wygasa</th>
         <th>Akcje</th>
       </tr>
     </thead>
     <tbody>
       {% for t in tokens %}
       <tr>
-        <td><code>{{ t.id }}</code></td>
-        <td><span class="status-badge status-{% if t.status.to_string() == "Active" %}accepted{% else %}failed{% endif %}">{{ t.status }}</span></td>
-        <td>{{ t.created_at.format("%Y-%m-%d %H:%M") }}</td>
-        <td>{{ t.expires_at.format("%Y-%m-%d %H:%M") }}</td>
+        <td><code>{{ t.ksef_token_id }}</code></td>
+        <td>{{ t.description.as_deref().unwrap_or("-") }}</td>
         <td>
-          <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/{{ t.id }}/revoke" style="display:inline" onsubmit="return confirm('Uniewazniony token nie moze byc przywrocony. Kontynuowac?')">
-            <button type="submit" class="btn btn-danger btn-sm">Uniewaznij</button>
+          {% if t.is_revoked() %}
+          <span class="status-badge status-failed">Unieważniony</span>
+          {% else %}
+          <span class="status-badge status-accepted">Aktywny</span>
+          {% endif %}
+        </td>
+        <td>{{ t.created_at.format("%Y-%m-%d %H:%M") }}</td>
+        <td>
+          {% if !t.is_revoked() %}
+          <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/tokens/{{ t.ksef_token_id }}/revoke" style="display:inline" onsubmit="return confirm('Unieważniony token nie może być przywrócony. Kontynuowac?')">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+            <button type="submit" class="btn btn-danger btn-sm">Unieważnij</button>
           </form>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

@@ -16,12 +16,13 @@
   {% endif %}
 
   <form method="post" action="/accounts/add">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-row">
       <label for="nip">NIP (10 cyfr)</label>
       <input type="text" name="nip" id="nip" value="{{ nip }}" required pattern="\d{10}" placeholder="1234567890" />
     </div>
     <div class="form-row">
-      <label for="display_name">Nazwa wyswietlana</label>
+      <label for="display_name">Nazwa wyświetlana</label>
       <input type="text" name="display_name" id="display_name" value="{{ display_name }}" required placeholder="Nazwa firmy Sp. z o.o." />
     </div>
     <div class="form-actions">

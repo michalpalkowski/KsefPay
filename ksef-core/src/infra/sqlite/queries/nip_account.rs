@@ -131,11 +131,10 @@ pub async fn find_by_nip<'e>(
     exec: impl SqliteExecutor<'e>,
     nip: &Nip,
 ) -> Result<Option<NipAccount>, RepositoryError> {
-    let row: Option<NipAccountRow> =
-        sqlx::query_as("SELECT * FROM nip_accounts WHERE nip = ?1")
-            .bind(nip.as_str())
-            .fetch_optional(exec)
-            .await?;
+    let row: Option<NipAccountRow> = sqlx::query_as("SELECT * FROM nip_accounts WHERE nip = ?1")
+        .bind(nip.as_str())
+        .fetch_optional(exec)
+        .await?;
     row.map(NipAccountRow::into_domain).transpose()
 }
 
@@ -190,22 +189,20 @@ pub async fn grant_access<'e>(
     user_id: &UserId,
     account_id: &NipAccountId,
 ) -> Result<(), RepositoryError> {
-    sqlx::query(
-        r"INSERT INTO user_nip_access (user_id, nip_account_id) VALUES (?1, ?2)",
-    )
-    .bind(user_id.to_string())
-    .bind(account_id.to_string())
-    .execute(exec)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-            RepositoryError::Duplicate {
-                entity: "UserNipAccess",
-                key: format!("{}:{}", user_id, account_id),
+    sqlx::query(r"INSERT INTO user_nip_access (user_id, nip_account_id) VALUES (?1, ?2)")
+        .bind(user_id.to_string())
+        .bind(account_id.to_string())
+        .execute(exec)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                RepositoryError::Duplicate {
+                    entity: "UserNipAccess",
+                    key: format!("{}:{}", user_id, account_id),
+                }
             }
-        }
-        _ => RepositoryError::Database(e),
-    })?;
+            _ => RepositoryError::Database(e),
+        })?;
 
     Ok(())
 }
@@ -215,13 +212,12 @@ pub async fn revoke_access<'e>(
     user_id: &UserId,
     account_id: &NipAccountId,
 ) -> Result<(), RepositoryError> {
-    let result = sqlx::query(
-        r"DELETE FROM user_nip_access WHERE user_id = ?1 AND nip_account_id = ?2",
-    )
-    .bind(user_id.to_string())
-    .bind(account_id.to_string())
-    .execute(exec)
-    .await?;
+    let result =
+        sqlx::query(r"DELETE FROM user_nip_access WHERE user_id = ?1 AND nip_account_id = ?2")
+            .bind(user_id.to_string())
+            .bind(account_id.to_string())
+            .execute(exec)
+            .await?;
 
     if result.rows_affected() == 0 {
         return Err(RepositoryError::NotFound {

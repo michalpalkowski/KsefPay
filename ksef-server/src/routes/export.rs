@@ -1,18 +1,22 @@
 use std::time::Duration;
 
 use askama::Template;
-use axum::Form;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::http::header;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use chrono::NaiveDate;
 use serde::Deserialize;
+use tower_sessions::Session;
 
+use ksef_core::domain::audit::AuditAction;
 use ksef_core::domain::session::{InvoiceQuery, SubjectType};
 
-use crate::extractors::NipContext;
+use crate::audit_log::log_action as log_audit_action;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::{CsrfForm, NipContext};
+use crate::request_meta::client_ip;
 use crate::state::AppState;
 
 #[derive(Template)]
@@ -25,6 +29,7 @@ struct ExportTemplate {
     result: Option<ExportResultDisplay>,
     default_date_from: String,
     default_date_to: String,
+    csrf_token: String,
 }
 
 #[allow(dead_code)]
@@ -65,12 +70,17 @@ fn status_display(status: ksef_core::domain::export::ExportStatus) -> (String, S
             ("Gotowy do pobrania".to_string(), "accepted".to_string())
         }
         ksef_core::domain::export::ExportStatus::Failed => {
-            ("Blad eksportu".to_string(), "failed".to_string())
+            ("Błąd eksportu".to_string(), "failed".to_string())
         }
     }
 }
 
-fn form_error(nip_prefix: String, user_email: String, error: String) -> Response {
+fn form_error(
+    nip_prefix: String,
+    user_email: String,
+    error: String,
+    csrf_token: String,
+) -> Response {
     let (def_from, def_to) = default_dates();
     render(ExportTemplate {
         active: "/export",
@@ -80,6 +90,7 @@ fn form_error(nip_prefix: String, user_email: String, error: String) -> Response
         result: None,
         default_date_from: def_from,
         default_date_to: def_to,
+        csrf_token,
     })
 }
 
@@ -90,8 +101,9 @@ pub struct ExportFormData {
     pub subject_type: String,
 }
 
-pub async fn export_page(nip_ctx: NipContext) -> Response {
+pub async fn export_page(nip_ctx: NipContext, session: Session) -> Response {
     let (from, to) = default_dates();
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     render(ExportTemplate {
         active: "/export",
         nip_prefix: Some(nip_ctx.account.nip.to_string()),
@@ -100,34 +112,54 @@ pub async fn export_page(nip_ctx: NipContext) -> Response {
         result: None,
         default_date_from: from,
         default_date_to: to,
+        csrf_token,
     })
 }
 
 pub async fn start_export(
     State(state): State<AppState>,
     nip_ctx: NipContext,
-    Form(form): Form<ExportFormData>,
+    headers: HeaderMap,
+    session: Session,
+    CsrfForm(form): CsrfForm<ExportFormData>,
 ) -> Response {
     let nip = &nip_ctx.account.nip;
+    let user_id = nip_ctx.user.id.clone();
+    let account_id = nip_ctx.account.id.clone();
     let nip_str = nip.to_string();
     let user_email = nip_ctx.user.email;
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
     let date_from = match NaiveDate::parse_from_str(&form.date_from, "%Y-%m-%d") {
         Ok(d) => d,
-        Err(e) => return form_error(nip_str, user_email, format!("Data od: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Data od: {e}"), csrf_token),
     };
     let date_to = match NaiveDate::parse_from_str(&form.date_to, "%Y-%m-%d") {
         Ok(d) => d,
-        Err(e) => return form_error(nip_str, user_email, format!("Data do: {e}")),
+        Err(e) => return form_error(nip_str, user_email, format!("Data do: {e}"), csrf_token),
     };
     let subject_type: SubjectType = match form.subject_type.parse() {
         Ok(s) => s,
-        Err(e) => return form_error(nip_str, user_email, format!("Typ podmiotu: {e}")),
+        Err(e) => {
+            return form_error(
+                nip_str,
+                user_email,
+                format!("Typ podmiotu: {e}"),
+                csrf_token,
+            );
+        }
     };
 
     let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
-        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostepu: {e}")),
+        Err(e) => {
+            return form_error(
+                nip_str,
+                user_email,
+                format!("Brak tokenu dostępu: {e}"),
+                csrf_token,
+            );
+        }
     };
 
     let query = InvoiceQuery {
@@ -139,17 +171,35 @@ pub async fn start_export(
     let job = match state.export_service.start(&token, query).await {
         Ok(j) => j,
         Err(e) => {
-            return form_error(nip_str, user_email, format!("Eksport nie powiodl sie: {e}"));
+            return form_error(
+                nip_str,
+                user_email,
+                format!("Eksport nie powiódł się: {e}"),
+                csrf_token,
+            );
         }
     };
 
+    log_audit_action(
+        &state,
+        &user_id,
+        &user_email,
+        Some(nip),
+        AuditAction::ExportStart,
+        Some(format!(
+            "reference={},date_from={},date_to={},subject_type={}",
+            job.reference_number, form.date_from, form.date_to, form.subject_type
+        )),
+        client_ip(&headers),
+    )
+    .await;
+
     // Store encryption key for later download
     if let (Some(key), Some(iv)) = (&job.encryption_key, &job.encryption_iv) {
-        state
-            .export_keys
-            .lock()
-            .unwrap()
-            .insert(job.reference_number.clone(), (key.clone(), iv.clone()));
+        state.export_keys.lock().unwrap().insert(
+            (account_id.clone(), job.reference_number.clone()),
+            (key.clone(), iv.clone()),
+        );
     }
 
     // Poll for up to ~15s to see if it completes quickly
@@ -166,7 +216,7 @@ pub async fn start_export(
                 .export_keys
                 .lock()
                 .unwrap()
-                .contains_key(&completed.reference_number);
+                .contains_key(&(account_id.clone(), completed.reference_number.clone()));
             render(ExportTemplate {
                 active: "/export",
                 nip_prefix: Some(nip_str),
@@ -182,6 +232,7 @@ pub async fn start_export(
                 }),
                 default_date_from: def_from,
                 default_date_to: def_to,
+                csrf_token: csrf_token.clone(),
             })
         }
         Err(_) => render(ExportTemplate {
@@ -199,6 +250,7 @@ pub async fn start_export(
             }),
             default_date_from: def_from,
             default_date_to: def_to,
+            csrf_token,
         }),
     }
 }
@@ -206,24 +258,37 @@ pub async fn start_export(
 pub async fn check_status(
     State(state): State<AppState>,
     nip_ctx: NipContext,
+    session: Session,
     Path((_nip, reference)): Path<(String, String)>,
 ) -> Response {
     let nip = &nip_ctx.account.nip;
+    let account_id = nip_ctx.account.id.clone();
     let nip_str = nip.to_string();
     let user_email = nip_ctx.user.email;
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
     let token = match state.session_service.ensure_token(nip).await {
         Ok(tp) => tp.access_token,
-        Err(e) => return form_error(nip_str, user_email, format!("Brak tokenu dostepu: {e}")),
+        Err(e) => {
+            return form_error(
+                nip_str,
+                user_email,
+                format!("Brak tokenu dostępu: {e}"),
+                csrf_token,
+            );
+        }
     };
 
     let (def_from, def_to) = default_dates();
     match state.export_service.get_status(&token, &reference).await {
         Ok(job) => {
             let (status_text, status_class) = status_display(job.status);
-            let is_pending =
-                matches!(job.status, ksef_core::domain::export::ExportStatus::Pending);
-            let has_key = state.export_keys.lock().unwrap().contains_key(&reference);
+            let is_pending = matches!(job.status, ksef_core::domain::export::ExportStatus::Pending);
+            let has_key = state
+                .export_keys
+                .lock()
+                .unwrap()
+                .contains_key(&(account_id.clone(), reference.clone()));
             render(ExportTemplate {
                 active: "/export",
                 nip_prefix: Some(nip_str),
@@ -239,12 +304,14 @@ pub async fn check_status(
                 }),
                 default_date_from: def_from,
                 default_date_to: def_to,
+                csrf_token,
             })
         }
         Err(e) => form_error(
             nip_str,
             user_email,
-            format!("Sprawdzenie statusu nie powiodlo sie: {e}"),
+            format!("Sprawdzenie statusu nie powiodło się: {e}"),
+            csrf_token,
         ),
     }
 }
@@ -256,13 +323,15 @@ pub async fn download(
     Path((_nip, reference)): Path<(String, String)>,
 ) -> Response {
     let nip = &nip_ctx.account.nip;
+    let account_id = nip_ctx.account.id.clone();
 
-    let (key, iv) = match state.export_keys.lock().unwrap().get(&reference) {
+    let key_ref = (account_id.clone(), reference.clone());
+    let (key, iv) = match state.export_keys.lock().unwrap().get(&key_ref) {
         Some((k, i)) => (k.clone(), i.clone()),
         None => {
             return (
                 StatusCode::NOT_FOUND,
-                "Klucz deszyfrowania nie jest dostepny. Rozpocznij nowy eksport.",
+                "Klucz deszyfrowania nie jest dostępny. Rozpocznij nowy eksport.",
             )
                 .into_response();
         }
@@ -273,7 +342,7 @@ pub async fn download(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Brak tokenu dostepu: {e}"),
+                format!("Brak tokenu dostępu: {e}"),
             )
                 .into_response();
         }
@@ -285,7 +354,7 @@ pub async fn download(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Blad statusu eksportu: {e}"),
+                format!("Błąd statusu eksportu: {e}"),
             )
                 .into_response();
         }
@@ -306,7 +375,7 @@ pub async fn download(
     {
         Ok(zip_bytes) => {
             // Clean up stored key
-            state.export_keys.lock().unwrap().remove(&reference);
+            state.export_keys.lock().unwrap().remove(&key_ref);
 
             let filename = format!("ksef-export-{reference}.zip");
             (
@@ -323,7 +392,7 @@ pub async fn download(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Deszyfrowanie nie powiodlo sie: {e}"),
+            format!("Deszyfrowanie nie powiodło się: {e}"),
         )
             .into_response(),
     }

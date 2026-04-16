@@ -1,3 +1,4 @@
+pub mod audit_service;
 pub mod batch_service;
 pub mod company_lookup_service;
 pub mod export_service;

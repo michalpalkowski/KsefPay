@@ -16,11 +16,13 @@ struct CompanyCacheRow {
 
 impl CompanyCacheRow {
     fn into_domain(self) -> Result<CompanyInfo, RepositoryError> {
-        let nip = Nip::parse(&self.nip).map_err(|e| RepositoryError::Database(sqlx::Error::Decode(
-            format!("invalid NIP in company_cache: {e}").into(),
-        )))?;
-        let bank_accounts: Vec<String> = serde_json::from_str(&self.bank_accounts)
-            .unwrap_or_default();
+        let nip = Nip::parse(&self.nip).map_err(|e| {
+            RepositoryError::Database(sqlx::Error::Decode(
+                format!("invalid NIP in company_cache: {e}").into(),
+            ))
+        })?;
+        let bank_accounts: Vec<String> =
+            serde_json::from_str(&self.bank_accounts).unwrap_or_default();
         Ok(CompanyInfo {
             nip,
             name: self.name,
@@ -45,12 +47,9 @@ pub async fn get<'e>(
     row.map(CompanyCacheRow::into_domain).transpose()
 }
 
-pub async fn set<'e>(
-    exec: impl PgExecutor<'e>,
-    info: &CompanyInfo,
-) -> Result<(), RepositoryError> {
-    let bank_accounts_json = serde_json::to_string(&info.bank_accounts)
-        .unwrap_or_else(|_| "[]".to_string());
+pub async fn set<'e>(exec: impl PgExecutor<'e>, info: &CompanyInfo) -> Result<(), RepositoryError> {
+    let bank_accounts_json =
+        serde_json::to_string(&info.bank_accounts).unwrap_or_else(|_| "[]".to_string());
     sqlx::query(
         r"INSERT INTO company_cache (nip, name, address, bank_accounts, vat_status, fetched_at)
         VALUES ($1, $2, $3, $4, $5, $6)

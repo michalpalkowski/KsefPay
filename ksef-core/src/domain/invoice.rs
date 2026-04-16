@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::error::DomainError;
 
 use super::nip::Nip;
+use super::nip_account::NipAccountId;
 use super::session::KSeFNumber;
 
 /// Format an invoice number: `{prefix}/{year}/{month:02}/{seq:03}`.
@@ -318,6 +319,8 @@ impl FromStr for InvoiceStatus {
 /// VAT rate as used in Polish invoices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VatRate {
+    /// 22% legacy standard rate
+    Rate22,
     /// 23% standard rate
     Rate23,
     /// 8% reduced rate
@@ -344,6 +347,7 @@ impl VatRate {
     #[must_use]
     pub fn percentage(self) -> Option<u8> {
         match self {
+            Self::Rate22 => Some(22),
             Self::Rate23 => Some(23),
             Self::Rate8 => Some(8),
             Self::Rate7 => Some(7),
@@ -359,7 +363,7 @@ impl VatRate {
     #[must_use]
     pub fn fa3_suffix(self) -> &'static str {
         match self {
-            Self::Rate23 => "1",
+            Self::Rate22 | Self::Rate23 => "1",
             Self::Rate8 | Self::Rate7 => "2",
             Self::Rate5 => "3",
             Self::Rate4 => "4",
@@ -373,6 +377,7 @@ impl VatRate {
 impl fmt::Display for VatRate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Rate22 => write!(f, "22"),
             Self::Rate23 => write!(f, "23"),
             Self::Rate8 => write!(f, "8"),
             Self::Rate7 => write!(f, "7"),
@@ -416,6 +421,7 @@ impl FromStr for VatRate {
         };
 
         match normalized_lower.as_str() {
+            "22" => Ok(Self::Rate22),
             "23" => Ok(Self::Rate23),
             "8" => Ok(Self::Rate8),
             "7" => Ok(Self::Rate7),
@@ -838,6 +844,8 @@ pub struct LineItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Invoice {
     pub id: InvoiceId,
+    /// Owning NIP account — tenant isolation boundary.
+    pub nip_account_id: NipAccountId,
     pub direction: Direction,
     pub status: InvoiceStatus,
     pub invoice_type: InvoiceType,
@@ -1106,6 +1114,7 @@ mod tests {
     #[test]
     fn vat_rate_percentage() {
         assert_eq!(VatRate::Rate23.percentage(), Some(23));
+        assert_eq!(VatRate::Rate22.percentage(), Some(22));
         assert_eq!(VatRate::Rate8.percentage(), Some(8));
         assert_eq!(VatRate::Rate5.percentage(), Some(5));
         assert_eq!(VatRate::Rate0.percentage(), Some(0));
@@ -1115,6 +1124,7 @@ mod tests {
     #[test]
     fn vat_rate_fa3_suffix() {
         assert_eq!(VatRate::Rate23.fa3_suffix(), "1");
+        assert_eq!(VatRate::Rate22.fa3_suffix(), "1");
         assert_eq!(VatRate::Rate8.fa3_suffix(), "2");
         assert_eq!(VatRate::Rate5.fa3_suffix(), "3");
         assert_eq!(VatRate::Rate0.fa3_suffix(), "6_1");
@@ -1124,6 +1134,7 @@ mod tests {
     #[test]
     fn vat_rate_display_and_from_str_round_trip() {
         for rate in [
+            VatRate::Rate22,
             VatRate::Rate23,
             VatRate::Rate8,
             VatRate::Rate5,

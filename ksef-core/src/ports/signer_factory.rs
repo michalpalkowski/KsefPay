@@ -7,7 +7,10 @@ use crate::ports::encryption::XadesSigner;
 /// Credentials for creating a signer.
 pub enum SignerCredentials<'a> {
     /// PEM-encoded cert + private key (from DB or env).
-    Pem { cert_pem: &'a [u8], key_pem: &'a [u8] },
+    Pem {
+        cert_pem: &'a [u8],
+        key_pem: &'a [u8],
+    },
     /// Auto-generate self-signed cert for the given NIP (test/demo only).
     AutoGenerate,
 }

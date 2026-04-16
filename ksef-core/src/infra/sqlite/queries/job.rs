@@ -16,7 +16,10 @@ pub(crate) struct JobRow {
     pub created_at: String,
 }
 
-fn parse_datetime(value: &str, field: &'static str) -> Result<chrono::DateTime<chrono::Utc>, QueueError> {
+fn parse_datetime(
+    value: &str,
+    field: &'static str,
+) -> Result<chrono::DateTime<chrono::Utc>, QueueError> {
     parse_sqlite_datetime(value, field).map_err(QueueError::DequeueFailed)
 }
 

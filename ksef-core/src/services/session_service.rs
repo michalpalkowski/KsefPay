@@ -140,9 +140,7 @@ impl SessionService {
 
     /// Resolve the signer for a NIP: factory with per-NIP cert, or global fallback.
     async fn resolve_signer(&self, nip: &Nip) -> Result<Arc<dyn XadesSigner>, SessionServiceError> {
-        let (Some(factory), Some(nip_repo)) =
-            (&self.signer_factory, &self.nip_account_repo)
-        else {
+        let (Some(factory), Some(nip_repo)) = (&self.signer_factory, &self.nip_account_repo) else {
             return Ok(self.signer.clone());
         };
 

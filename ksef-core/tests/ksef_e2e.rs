@@ -47,6 +47,17 @@ fn e2e_nip() -> Nip {
     Nip::parse(&raw).unwrap_or_else(|e| panic!("invalid KSEF_E2E_NIP '{raw}': {e}"))
 }
 
+fn e2e_authorized_nip(context_nip: &Nip) -> Nip {
+    let raw = std::env::var("KSEF_E2E_AUTHORIZED_NIP").unwrap_or_else(|_| "9999999999".to_string());
+    let authorized =
+        Nip::parse(&raw).unwrap_or_else(|e| panic!("invalid KSEF_E2E_AUTHORIZED_NIP '{raw}': {e}"));
+    assert_ne!(
+        &authorized, context_nip,
+        "KSEF_E2E_AUTHORIZED_NIP must differ from KSEF_E2E_NIP (context owner)"
+    );
+    authorized
+}
+
 fn read_pem_env(var: &str) -> Result<Vec<u8>, String> {
     let raw = std::env::var(var).map_err(|_| format!("{var} is not set"))?;
     let path = std::path::Path::new(&raw);
@@ -91,6 +102,7 @@ fn load_e2e_signer_from_env() -> OpenSslXadesSigner {
 
 mod fixtures {
     use ksef_core::domain::invoice::*;
+    use ksef_core::domain::nip_account::NipAccountId;
 
     /// A test invoice using the E2E NIP from env (or default sandbox NIP).
     pub fn test_invoice() -> Invoice {
@@ -99,6 +111,7 @@ mod fixtures {
 
         Invoice {
             id: InvoiceId::new(),
+            nip_account_id: NipAccountId::from_uuid(uuid::Uuid::from_u128(1)),
             direction: Direction::Outgoing,
             status: InvoiceStatus::Draft,
             invoice_type: InvoiceType::Vat,
@@ -200,16 +213,16 @@ async fn xades_sign_and_submit_succeeds() {
 async fn fa3_xml_generation_produces_valid_xml() {
     let invoice = fixtures::test_invoice();
     let xml = invoice_to_xml(&invoice).unwrap();
+    let xml_str = xml.as_str();
 
     println!("Generated FA(3) XML ({} bytes):", xml.as_bytes().len());
-    println!("{}", xml.as_str());
+    println!("{xml_str}");
 
     assert!(
-        xml.as_str()
-            .contains("http://crd.gov.pl/wzor/2025/06/25/13775/")
+        xml_str.contains("http://crd.gov.pl/wzor/2025/06/25/13775/")
     );
-    assert!(xml.as_str().contains("<Faktura"));
-    assert!(xml.as_str().contains("<FaWiersz>"));
+    assert!(xml_str.contains("<tns:Faktura") || xml_str.contains("<Faktura"));
+    assert!(xml_str.contains("<tns:FaWiersz>") || xml_str.contains("<FaWiersz>"));
 }
 
 /// Step 4: Verify encryption produces valid output.
@@ -523,10 +536,16 @@ async fn refresh_token_returns_new_valid_pair() {
 #[ignore = "requires network access to KSeF sandbox + permissions management rights"]
 async fn permissions_grant_query_revoke_roundtrip() {
     let (token_pair, api, nip) = authenticate_for_query().await;
+    let authorized_nip = e2e_authorized_nip(&nip);
+
+    println!(
+        "Permissions roundtrip context_nip={} authorized_nip={}",
+        nip, authorized_nip
+    );
 
     let query = PermissionQueryRequest {
         context_nip: nip.clone(),
-        authorized_nip: Some(nip.clone()),
+        authorized_nip: Some(authorized_nip.clone()),
         permission: Some(PermissionType::InvoiceRead),
     };
 
@@ -538,7 +557,7 @@ async fn permissions_grant_query_revoke_roundtrip() {
 
     let grant = PermissionGrantRequest {
         context_nip: nip.clone(),
-        authorized_nip: nip.clone(),
+        authorized_nip: authorized_nip.clone(),
         permissions: vec![PermissionType::InvoiceRead],
     };
     api.grant_permissions(&token_pair.access_token, &grant)
@@ -550,11 +569,16 @@ async fn permissions_grant_query_revoke_roundtrip() {
         .await
         .unwrap();
     println!("Permissions after grant: {}", after_grant.len());
-    assert!(after_grant.len() >= before.len());
+    assert!(
+        after_grant.len() >= before.len(),
+        "expected at least as many permissions after grant; before={}, after={}",
+        before.len(),
+        after_grant.len()
+    );
 
     let revoke = PermissionRevokeRequest {
         context_nip: nip.clone(),
-        authorized_nip: nip,
+        authorized_nip: authorized_nip.clone(),
         permissions: vec![PermissionType::InvoiceRead],
     };
     api.revoke_permissions(&token_pair.access_token, &revoke)
@@ -566,6 +590,19 @@ async fn permissions_grant_query_revoke_roundtrip() {
         .await
         .unwrap();
     println!("Permissions after revoke: {}", after_revoke.len());
+    assert!(
+        after_revoke.len() <= after_grant.len(),
+        "expected no growth after revoke; after_grant={}, after_revoke={}",
+        after_grant.len(),
+        after_revoke.len()
+    );
+    if before.is_empty() {
+        assert!(
+            after_revoke.is_empty(),
+            "expected revoke to clear freshly granted permission for authorized_nip={}",
+            authorized_nip
+        );
+    }
 }
 
 /// Step 9: Verify token management endpoints end-to-end.

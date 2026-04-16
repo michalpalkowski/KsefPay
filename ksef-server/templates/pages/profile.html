@@ -16,6 +16,7 @@
 
   <h2>Zmien haslo</h2>
   <form method="post" action="/profile/password" class="auth-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-group">
       <label for="current_password">Obecne haslo</label>
       <input type="password" name="current_password" id="current_password" required

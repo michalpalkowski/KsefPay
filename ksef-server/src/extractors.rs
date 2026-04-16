@@ -1,13 +1,17 @@
-use axum::extract::FromRequestParts;
+use axum::Form;
+use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Redirect, Response};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tower_sessions::Session;
 
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::NipAccount;
 use ksef_core::domain::user::UserId;
 
+use crate::csrf::CSRF_SESSION_KEY;
 use crate::state::AppState;
 
 /// Extractor: authenticated user from tower-sessions.
@@ -24,9 +28,7 @@ impl IntoResponse for AuthUserRejection {
     fn into_response(self) -> Response {
         match self {
             Self::NotLoggedIn => Redirect::to("/login").into_response(),
-            Self::InternalError(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
-            }
+            Self::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }
 }
@@ -91,12 +93,11 @@ impl IntoResponse for NipContextRejection {
     fn into_response(self) -> Response {
         match self {
             Self::Auth(inner) => inner.into_response(),
-            Self::Forbidden => (StatusCode::FORBIDDEN, "Brak dostepu do tego konta NIP")
-                .into_response(),
-            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
-            Self::InternalError(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            Self::Forbidden => {
+                (StatusCode::FORBIDDEN, "Brak dostępu do tego konta NIP").into_response()
             }
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            Self::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }
 }
@@ -121,17 +122,17 @@ impl FromRequestParts<AppState> for NipContext {
                 extract_nip_from_uri(&parts.uri)
             })
             .ok_or_else(|| {
-                NipContextRejection::BadRequest("brak parametru NIP w sciezce".to_string())
+                NipContextRejection::BadRequest("brak parametru NIP w ścieżce".to_string())
             })?;
 
         let nip = Nip::parse(&nip_raw)
-            .map_err(|e| NipContextRejection::BadRequest(format!("nieprawidlowy NIP: {e}")))?;
+            .map_err(|e| NipContextRejection::BadRequest(format!("nieprawidłowy NIP: {e}")))?;
 
         let account = state
             .nip_account_repo
             .has_access(&user.id, &nip)
             .await
-            .map_err(|e| NipContextRejection::InternalError(format!("blad repozytorium: {e}")))?
+            .map_err(|e| NipContextRejection::InternalError(format!("błąd repozytorium: {e}")))?
             .ok_or(NipContextRejection::Forbidden)?;
 
         Ok(Self { user, account })
@@ -147,5 +148,71 @@ fn extract_nip_from_uri(uri: &axum::http::Uri) -> Option<String> {
         Some(segments[1].to_string())
     } else {
         None
+    }
+}
+
+/// Form extractor with built-in CSRF validation.
+///
+/// Expects a `_csrf` field in URL-encoded form body and compares it with
+/// the token stored in the session.
+pub struct CsrfForm<T>(pub T);
+
+#[derive(Deserialize)]
+struct CsrfPayload<T> {
+    #[serde(rename = "_csrf")]
+    csrf: String,
+    #[serde(flatten)]
+    inner: T,
+}
+
+pub enum CsrfFormRejection {
+    Forbidden,
+    BadRequest(String),
+    InternalError(String),
+}
+
+impl IntoResponse for CsrfFormRejection {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "Żądanie odrzucone: nieprawidłowy token CSRF",
+            )
+                .into_response(),
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+            Self::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        }
+    }
+}
+
+impl<T> FromRequest<AppState> for CsrfForm<T>
+where
+    T: DeserializeOwned + Send,
+{
+    type Rejection = CsrfFormRejection;
+
+    async fn from_request(req: Request, state: &AppState) -> Result<Self, Self::Rejection> {
+        let (mut parts, body) = req.into_parts();
+
+        let session = Session::from_request_parts(&mut parts, state)
+            .await
+            .map_err(|e| CsrfFormRejection::InternalError(format!("session error: {e:?}")))?;
+
+        let expected = session
+            .get::<String>(CSRF_SESSION_KEY)
+            .await
+            .map_err(|e| CsrfFormRejection::InternalError(format!("session read error: {e}")))?
+            .ok_or(CsrfFormRejection::Forbidden)?;
+
+        let req = Request::from_parts(parts, body);
+        let Form(payload) = Form::<CsrfPayload<T>>::from_request(req, state)
+            .await
+            .map_err(|e| CsrfFormRejection::BadRequest(format!("invalid form data: {e}")))?;
+
+        if payload.csrf != expected {
+            return Err(CsrfFormRejection::Forbidden);
+        }
+
+        Ok(Self(payload.inner))
     }
 }

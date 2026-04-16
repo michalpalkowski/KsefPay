@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -21,6 +22,9 @@ pub struct HttpKSeFClient {
     http: KSeFHttpClient,
 }
 
+const SEND_INVOICE_STATUS_MAX_ATTEMPTS: usize = 90;
+const SEND_INVOICE_STATUS_POLL_DELAY: Duration = Duration::from_secs(1);
+
 impl HttpKSeFClient {
     #[must_use]
     pub fn new(environment: KSeFEnvironment) -> Self {
@@ -39,6 +43,103 @@ impl HttpKSeFClient {
             http: KSeFHttpClient::with_http_controls(environment, rate_limiter, retry_policy),
         }
     }
+
+    async fn wait_for_invoice_ksef_number(
+        &self,
+        access_token: &AccessToken,
+        session: &SessionReference,
+        invoice_reference_number: &str,
+    ) -> Result<String, KSeFError> {
+        let url = format!(
+            "{}/sessions/{}/invoices/{}",
+            self.http.base_url, session, invoice_reference_number
+        );
+
+        for attempt in 1..=SEND_INVOICE_STATUS_MAX_ATTEMPTS {
+            let response = self
+                .http
+                .send(RateLimitCategory::Query, || {
+                    self.http
+                        .client
+                        .get(&url)
+                        .bearer_auth(access_token.as_str())
+                        .send()
+                })
+                .await?;
+
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|e| KSeFError::StatusQueryFailed(format!("parse response: {e}")))?;
+
+            let status = payload
+                .get("status")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    KSeFError::StatusQueryFailed(
+                        "invoice status response missing status object".to_string(),
+                    )
+                })?;
+            let code = status.get("code").and_then(Value::as_i64).ok_or_else(|| {
+                KSeFError::StatusQueryFailed(
+                    "invoice status response missing status.code".to_string(),
+                )
+            })?;
+            let description = status
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing description>");
+            let details = status
+                .get("details")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .unwrap_or_default();
+
+            match code {
+                100 | 150 => {
+                    if attempt < SEND_INVOICE_STATUS_MAX_ATTEMPTS {
+                        tokio::time::sleep(SEND_INVOICE_STATUS_POLL_DELAY).await;
+                        continue;
+                    }
+                    return Err(KSeFError::InvoiceSubmissionFailed(format!(
+                        "invoice status timeout after {} polls for reference {} (last code {}: {})",
+                        SEND_INVOICE_STATUS_MAX_ATTEMPTS,
+                        invoice_reference_number,
+                        code,
+                        description
+                    )));
+                }
+                200 => {
+                    let ksef_number = str_by_keys(&payload, &["ksefNumber", "ksefReferenceNumber"])
+                        .ok_or_else(|| {
+                            KSeFError::StatusQueryFailed(
+                                "invoice status code 200 but ksefNumber is missing".to_string(),
+                            )
+                        })?;
+                    return Ok(ksef_number.to_string());
+                }
+                other => {
+                    let details_suffix = if details.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; details: {details}")
+                    };
+                    return Err(KSeFError::InvoiceSubmissionFailed(format!(
+                        "invoice status code {other}: {description}{details_suffix}"
+                    )));
+                }
+            }
+        }
+
+        Err(KSeFError::InvoiceSubmissionFailed(format!(
+            "invoice status polling exhausted for reference {invoice_reference_number}"
+        )))
+    }
 }
 
 #[derive(Deserialize)]
@@ -49,14 +150,13 @@ struct OpenSessionResponse {
 
 #[derive(Deserialize)]
 struct SendInvoiceResponse {
-    #[serde(alias = "elementReferenceNumber")]
-    element_ref: Option<String>,
-    #[serde(alias = "ksefReferenceNumber")]
-    ksef_ref: Option<String>,
     #[serde(alias = "referenceNumber")]
-    reference: Option<String>,
     #[serde(alias = "invoiceReferenceNumber")]
-    invoice_ref: Option<String>,
+    #[serde(alias = "elementReferenceNumber")]
+    reference_number: String,
+    #[serde(alias = "ksefNumber")]
+    #[serde(alias = "ksefReferenceNumber")]
+    ksef_number: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -240,15 +340,13 @@ impl KSeFClient for HttpKSeFClient {
             KSeFError::InvoiceSubmissionFailed(format!("parse response: {e}; body={body}"))
         })?;
 
-        let ksef_number = data
-            .ksef_ref
-            .or(data.element_ref)
-            .or(data.reference)
-            .or(data.invoice_ref)
-            .ok_or_else(|| {
-                KSeFError::InvoiceSubmissionFailed("no reference number in response".to_string())
-            })?;
+        if let Some(ksef_number) = data.ksef_number {
+            return Ok(KSeFNumber::new(ksef_number));
+        }
 
+        let ksef_number = self
+            .wait_for_invoice_ksef_number(access_token, session, &data.reference_number)
+            .await?;
         Ok(KSeFNumber::new(ksef_number))
     }
 
@@ -443,6 +541,11 @@ impl KSeFClient for HttpKSeFClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::auth::AccessToken;
+    use crate::domain::crypto::EncryptedInvoice;
+    use crate::domain::environment::KSeFEnvironment;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn parse_metadata_accepts_items_container() {
@@ -484,5 +587,98 @@ mod tests {
             parsed[0].invoice_date,
             chrono::NaiveDate::from_ymd_opt(2026, 4, 12).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn send_invoice_reference_number_is_resolved_via_status_endpoint() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/sessions/online/mock-session/invoices"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "referenceNumber": "REF-1"
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/sessions/mock-session/invoices/REF-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": { "code": 200, "description": "Sukces" },
+                "ksefNumber": "KSeF-FINAL-001"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut client = HttpKSeFClient::new(KSeFEnvironment::Test);
+        client.http.base_url = server.uri();
+        let access_token = AccessToken::new("test-access-token".to_string());
+        let session = SessionReference::new("mock-session".to_string());
+        let encrypted = EncryptedInvoice::new(
+            b"mock-encrypted-key".to_vec(),
+            b"mock-iv-16bytes!".to_vec(),
+            b"mock-encrypted-data".to_vec(),
+            "mock-plaintext-hash".to_string(),
+            123,
+            "mock-encrypted-hash".to_string(),
+            456,
+        );
+
+        let ksef_number = client
+            .send_invoice(&access_token, &session, &encrypted)
+            .await
+            .unwrap();
+
+        assert_eq!(ksef_number.as_str(), "KSeF-FINAL-001");
+    }
+
+    #[tokio::test]
+    async fn send_invoice_propagates_terminal_invoice_status_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/sessions/online/mock-session/invoices"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "referenceNumber": "REF-2"
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/sessions/mock-session/invoices/REF-2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": {
+                    "code": 450,
+                    "description": "Błąd weryfikacji semantyki dokumentu faktury",
+                    "details": ["Podmiot2: missing JST/GV"]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut client = HttpKSeFClient::new(KSeFEnvironment::Test);
+        client.http.base_url = server.uri();
+        let access_token = AccessToken::new("test-access-token".to_string());
+        let session = SessionReference::new("mock-session".to_string());
+        let encrypted = EncryptedInvoice::new(
+            b"mock-encrypted-key".to_vec(),
+            b"mock-iv-16bytes!".to_vec(),
+            b"mock-encrypted-data".to_vec(),
+            "mock-plaintext-hash".to_string(),
+            123,
+            "mock-encrypted-hash".to_string(),
+            456,
+        );
+
+        let err = client
+            .send_invoice(&access_token, &session, &encrypted)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, KSeFError::InvoiceSubmissionFailed(_)));
+        assert!(err.to_string().contains("450"));
+        assert!(err.to_string().contains("Podmiot2"));
     }
 }

@@ -16,6 +16,10 @@
     </div>
   </div>
 
+  {% if fetch_started %}
+  <div class="alert alert-info" id="fetch-banner">Pobieranie faktur z KSeF w toku...</div>
+  {% endif %}
+
   <div class="tabs">
     {% if let Some(nip) = nip_prefix %}
     <a href="/accounts/{{ nip }}/invoices?tab=outgoing" class="tab {% if tab == "outgoing" %}tab-active{% endif %}">
@@ -123,4 +127,45 @@
     {% endif %}
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if fetch_started %}
+<script>
+(function() {
+  var nip = "{{ nip_prefix.as_deref().unwrap_or_default() }}";
+  var banner = document.getElementById("fetch-banner");
+  var poll = setInterval(function() {
+    fetch("/accounts/" + nip + "/invoices/fetch/status")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.status === "done") {
+          clearInterval(poll);
+          var msg = "Pobrano: " + data.inserted + " nowych, " + data.updated + " zaktualizowanych.";
+          if (data.errors && data.errors.length > 0) {
+            msg += " Bledy (" + data.errors.length + "): " + data.errors.join("; ");
+            banner.className = "alert alert-error";
+          } else {
+            banner.className = "alert alert-success";
+          }
+          banner.textContent = msg;
+          setTimeout(function() {
+            window.location.href = "/accounts/" + nip + "/invoices?tab=incoming";
+          }, 3000);
+        } else if (data.status === "failed") {
+          clearInterval(poll);
+          banner.className = "alert alert-error";
+          banner.textContent = "Pobieranie nie powiodlo sie: " + data.message;
+        }
+      });
+  }, 2000);
+  setTimeout(function() {
+    clearInterval(poll);
+    if (banner.className.indexOf("alert-info") !== -1) {
+      banner.textContent = "Pobieranie trwa dluzej niz oczekiwano. Odswiez strone recznie.";
+    }
+  }, 120000);
+})();
+</script>
+{% endif %}
 {% endblock %}

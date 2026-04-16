@@ -1,15 +1,20 @@
 use askama::Template;
-use axum::Form;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
+use tower_sessions::Session;
 
-use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
-use crate::extractors::AuthUser;
+use ksef_core::domain::audit::AuditAction;
+
+use crate::audit_log::log_action as log_audit_action;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::{AuthUser, CsrfForm};
+use crate::request_meta::client_ip;
 use crate::state::AppState;
 
 use super::auth::validate_password_strength;
@@ -22,6 +27,7 @@ struct ProfileTemplate {
     user_email: String,
     error: Option<String>,
     success: Option<String>,
+    csrf_token: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -46,13 +52,19 @@ fn render_with_status<T: Template>(status: StatusCode, tmpl: T) -> Response {
     }
 }
 
-fn page(email: &str, error: Option<String>, success: Option<String>) -> ProfileTemplate {
+fn page(
+    email: &str,
+    error: Option<String>,
+    success: Option<String>,
+    csrf_token: String,
+) -> ProfileTemplate {
     ProfileTemplate {
         active: "/profile",
         nip_prefix: None,
         user_email: email.to_string(),
         error,
         success,
+        csrf_token,
     }
 }
 
@@ -63,22 +75,32 @@ pub struct ChangePasswordForm {
     pub new_password_confirm: String,
 }
 
-pub async fn profile_page(auth: AuthUser) -> Response {
-    render(page(&auth.email, None, None))
+pub async fn profile_page(auth: AuthUser, session: Session) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    render(page(&auth.email, None, None, csrf_token))
 }
 
 pub async fn change_password(
     State(state): State<AppState>,
     auth: AuthUser,
-    Form(form): Form<ChangePasswordForm>,
+    headers: HeaderMap,
+    session: Session,
+    CsrfForm(form): CsrfForm<ChangePasswordForm>,
 ) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+
     // Load user to verify current password
     let user = match state.user_repo.find_by_id(&auth.id).await {
         Ok(u) => u,
         Err(e) => {
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                page(&auth.email, Some(format!("Blad serwera: {e}")), None),
+                page(
+                    &auth.email,
+                    Some(format!("Błąd serwera: {e}")),
+                    None,
+                    csrf_token,
+                ),
             );
         }
     };
@@ -87,7 +109,12 @@ pub async fn change_password(
     let Ok(parsed_hash) = PasswordHash::new(&user.password_hash) else {
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            page(&auth.email, Some("Blad weryfikacji hasla".to_string()), None),
+            page(
+                &auth.email,
+                Some("Błąd weryfikacji hasła".to_string()),
+                None,
+                csrf_token,
+            ),
         );
     };
 
@@ -97,7 +124,12 @@ pub async fn change_password(
     {
         return render_with_status(
             StatusCode::BAD_REQUEST,
-            page(&auth.email, Some("Obecne haslo jest nieprawidlowe".to_string()), None),
+            page(
+                &auth.email,
+                Some("Obecne hasło jest nieprawidłowe".to_string()),
+                None,
+                csrf_token,
+            ),
         );
     }
 
@@ -105,14 +137,19 @@ pub async fn change_password(
     if let Err(msg) = validate_password_strength(&form.new_password) {
         return render_with_status(
             StatusCode::BAD_REQUEST,
-            page(&auth.email, Some(msg), None),
+            page(&auth.email, Some(msg), None, csrf_token),
         );
     }
 
     if form.new_password != form.new_password_confirm {
         return render_with_status(
             StatusCode::BAD_REQUEST,
-            page(&auth.email, Some("Nowe hasla nie sa zgodne".to_string()), None),
+            page(
+                &auth.email,
+                Some("Nowe hasła nie są zgodne".to_string()),
+                None,
+                csrf_token,
+            ),
         );
     }
 
@@ -123,7 +160,12 @@ pub async fn change_password(
         Err(e) => {
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                page(&auth.email, Some(format!("Blad hashowania: {e}")), None),
+                page(
+                    &auth.email,
+                    Some(format!("Błąd hashowania: {e}")),
+                    None,
+                    csrf_token,
+                ),
             );
         }
     };
@@ -135,9 +177,30 @@ pub async fn change_password(
     if let Err(e) = state.user_repo.update_password(&updated_user).await {
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            page(&auth.email, Some(format!("Nie udalo sie zmienic hasla: {e}")), None),
+            page(
+                &auth.email,
+                Some(format!("Nie udało się zmienić hasła: {e}")),
+                None,
+                csrf_token,
+            ),
         );
     }
 
-    render(page(&auth.email, None, Some("Haslo zostalo zmienione".to_string())))
+    log_audit_action(
+        &state,
+        &auth.id,
+        &auth.email,
+        None,
+        AuditAction::ChangePassword,
+        None,
+        client_ip(&headers),
+    )
+    .await;
+
+    render(page(
+        &auth.email,
+        None,
+        Some("Hasło zostało zmienione".to_string()),
+        csrf_token,
+    ))
 }

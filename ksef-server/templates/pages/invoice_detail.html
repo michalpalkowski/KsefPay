@@ -39,7 +39,7 @@
     {% match invoice.ksef_error %}
       {% when Some with (err) %}
       <div class="meta-row error-row">
-        <span class="meta-label">Blad KSeF</span>
+        <span class="meta-label">Błąd KSeF</span>
         <span>{{ err }}</span>
       </div>
       {% when None %}
@@ -98,6 +98,7 @@
   {% if invoice.status.to_string() == "draft" %}
   <div class="invoice-actions">
     <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/{{ invoice.id }}/submit">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
       <button type="submit" class="btn btn-primary">Wyslij do KSeF</button>
     </form>
   </div>
@@ -113,5 +114,5 @@
   {% endmatch %}
 </div>
 
-<a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="back-link">Powrot do listy</a>
+<a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="back-link">Powrót do listy</a>
 {% endblock %}

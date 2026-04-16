@@ -65,13 +65,17 @@ fn build_minimal_xml(fa_wiersze: &str, payment_code: u8, total_gross: &str) -> S
     <SystemInfo>integration-test</SystemInfo>
   </Naglowek>
   <Podmiot1><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>Seller</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>ul. A</AdresL1><AdresL2>00-001</AdresL2></Adres></Podmiot1>
-  <Podmiot2><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>Buyer</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>ul. B</AdresL1><AdresL2>00-002</AdresL2></Adres></Podmiot2>
+  <Podmiot2><DaneIdentyfikacyjne><NIP>5260250274</NIP><Nazwa>Buyer</Nazwa></DaneIdentyfikacyjne><Adres><KodKraju>PL</KodKraju><AdresL1>ul. B</AdresL1><AdresL2>00-002</AdresL2></Adres><JST>2</JST><GV>2</GV></Podmiot2>
   <Fa>
     <KodWaluty>PLN</KodWaluty>
     <P_1>2026-04-13</P_1>
     <P_2>FV/TEST/001</P_2>
     <P_6>2026-04-13</P_6>
+    <P_13_1>100.00</P_13_1>
+    <P_14_1>23.00</P_14_1>
     <P_15>{total_gross}</P_15>
+    <Adnotacje><P_16>2</P_16><P_17>2</P_17><P_18>2</P_18><P_18A>2</P_18A><Zwolnienie><P_19N>1</P_19N></Zwolnienie><NoweSrodkiTransportu><P_22N>1</P_22N></NoweSrodkiTransportu><P_23>2</P_23><PMarzy><P_PMarzyN>1</P_PMarzyN></PMarzy></Adnotacje>
+    <RodzajFaktury>VAT</RodzajFaktury>
     {fa_wiersze}
     <Platnosc>
       <TerminPlatnosci><Termin>2026-04-27</Termin></TerminPlatnosci>

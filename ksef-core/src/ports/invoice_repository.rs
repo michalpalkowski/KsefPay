@@ -1,19 +1,48 @@
 use async_trait::async_trait;
 
 use crate::domain::invoice::{Direction, Invoice, InvoiceId, InvoiceStatus};
-use crate::domain::nip::Nip;
+use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 
 /// Filter criteria for listing invoices.
-#[derive(Debug, Default, Clone)]
+///
+/// `account_id` is required — the type system enforces tenant isolation.
+/// Every query must specify which account's invoices to return.
+#[derive(Debug, Clone)]
 pub struct InvoiceFilter {
+    /// Tenant boundary: only invoices belonging to this NIP account.
+    pub account_id: NipAccountId,
     pub direction: Option<Direction>,
     pub status: Option<InvoiceStatus>,
-    pub nip_seller: Option<Nip>,
-    pub nip_buyer: Option<Nip>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+}
+
+impl InvoiceFilter {
+    /// Create a filter scoped to the given NIP account.
+    #[must_use]
+    pub fn for_account(account_id: NipAccountId) -> Self {
+        Self {
+            account_id,
+            direction: None,
+            status: None,
+            limit: None,
+            offset: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_direction(mut self, direction: Direction) -> Self {
+        self.direction = Some(direction);
+        self
+    }
+
+    #[must_use]
+    pub fn with_status(mut self, status: InvoiceStatus) -> Self {
+        self.status = Some(status);
+        self
+    }
 }
 
 /// Port: invoice persistence.
@@ -21,7 +50,11 @@ pub struct InvoiceFilter {
 pub trait InvoiceRepository: Send + Sync {
     async fn save(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError>;
 
-    async fn find_by_id(&self, id: &InvoiceId) -> Result<Invoice, RepositoryError>;
+    async fn find_by_id(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+    ) -> Result<Invoice, RepositoryError>;
 
     async fn update_status(
         &self,
@@ -40,6 +73,12 @@ pub trait InvoiceRepository: Send + Sync {
     async fn find_by_ksef_number(
         &self,
         ksef_number: &KSeFNumber,
+    ) -> Result<Option<Invoice>, RepositoryError>;
+
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
     ) -> Result<Option<Invoice>, RepositoryError>;
 
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError>;

@@ -44,16 +44,17 @@ pub fn router() -> Router<AppState> {
             "/accounts/{nip}/invoices/fetch",
             get(fetch::fetch_form).post(fetch::fetch_execute),
         )
+        .route(
+            "/accounts/{nip}/invoices/fetch/status",
+            get(fetch::fetch_status),
+        )
         .route("/accounts/{nip}/invoices/{id}", get(invoices::detail))
         .route(
             "/accounts/{nip}/invoices/{id}/submit",
             post(invoices::submit),
         )
         // Sessions
-        .route(
-            "/accounts/{nip}/sessions",
-            get(sessions::sessions_page),
-        )
+        .route("/accounts/{nip}/sessions", get(sessions::sessions_page))
         .route(
             "/accounts/{nip}/sessions/authenticate",
             post(sessions::authenticate),
@@ -81,10 +82,7 @@ pub fn router() -> Router<AppState> {
         )
         // Tokens
         .route("/accounts/{nip}/tokens", get(tokens::tokens_page))
-        .route(
-            "/accounts/{nip}/tokens/generate",
-            post(tokens::generate),
-        )
+        .route("/accounts/{nip}/tokens/generate", post(tokens::generate))
         .route(
             "/accounts/{nip}/tokens/{token_id}/revoke",
             post(tokens::revoke),

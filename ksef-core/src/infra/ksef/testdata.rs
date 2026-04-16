@@ -221,34 +221,16 @@ impl TestDataClient {
         })
     }
 
-    /// Convenience: register subject + grant standard invoice permissions.
+    /// Convenience: register sandbox subject only.
     ///
-    /// Safe to call multiple times — idempotent for subject creation,
-    /// best-effort for permissions (sandbox may return 500).
-    pub async fn setup_test_subject(
-        &self,
-        nip: &Nip,
-    ) -> Result<(SubjectCreateResult, PermissionsGrantResult), KSeFError> {
-        let subject_result = self
-            .create_subject(
-                nip,
-                &format!("ksef-paymoney test subject NIP {nip}"),
-                TestSubjectType::EnforcementAuthority,
-            )
-            .await?;
-
-        let perm_result = self
-            .grant_permissions(
-                nip,
-                nip,
-                &[
-                    TestPermissionType::InvoiceRead,
-                    TestPermissionType::InvoiceWrite,
-                    TestPermissionType::CredentialsManage,
-                ],
-            )
-            .await?;
-
-        Ok((subject_result, perm_result))
+    /// Owner access in the same NIP context is implicit, so this helper
+    /// does not attempt self-grants.
+    pub async fn setup_test_subject(&self, nip: &Nip) -> Result<SubjectCreateResult, KSeFError> {
+        self.create_subject(
+            nip,
+            &format!("ksef-paymoney test subject NIP {nip}"),
+            TestSubjectType::EnforcementAuthority,
+        )
+        .await
     }
 }

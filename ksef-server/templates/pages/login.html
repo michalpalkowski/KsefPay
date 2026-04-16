@@ -10,7 +10,7 @@
 <div class="page-card auth-card">
   <div class="page-header">
     <h1>Logowanie</h1>
-    <p class="page-copy">Zaloguj sie do KSeF Pay</p>
+    <p class="page-copy">Zaloguj się do KSeF Pay</p>
   </div>
 
   {% if let Some(msg) = error %}
@@ -18,6 +18,7 @@
   {% endif %}
 
   <form method="post" action="/login" class="auth-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <div class="form-group">
       <label for="email">Email</label>
       <input type="email" name="email" id="email" value="{{ email }}"
@@ -30,12 +31,12 @@
              autocomplete="current-password" />
     </div>
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary" style="width: 100%;">Zaloguj sie</button>
+      <button type="submit" class="btn btn-primary" style="width: 100%;">Zaloguj się</button>
     </div>
   </form>
 
   <p class="page-copy" style="margin-top: 1rem; text-align: center;">
-    Nie masz konta? <a href="/register">Zarejestruj sie</a>
+    Nie masz konta? <a href="/register">Zarejestruj się</a>
   </p>
 </div>
 {% endblock %}

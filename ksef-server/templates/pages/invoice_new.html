@@ -15,6 +15,7 @@
   {% endif %}
 
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="invoice-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
     <fieldset>
       <legend>Dane faktury</legend>
       <div class="form-row">
@@ -96,10 +97,16 @@
               <label>Stawka VAT</label>
               <select name="items[0][vat_rate]">
                 <option value="23" {% if f.item_vat_rate == "23" %}selected{% endif %}>23%</option>
+                <option value="22" {% if f.item_vat_rate == "22" %}selected{% endif %}>22% (historyczna)</option>
                 <option value="8" {% if f.item_vat_rate == "8" %}selected{% endif %}>8%</option>
+                <option value="7" {% if f.item_vat_rate == "7" %}selected{% endif %}>7% (historyczna)</option>
                 <option value="5" {% if f.item_vat_rate == "5" %}selected{% endif %}>5%</option>
+                <option value="4" {% if f.item_vat_rate == "4" %}selected{% endif %}>4%</option>
+                <option value="3" {% if f.item_vat_rate == "3" %}selected{% endif %}>3%</option>
                 <option value="0" {% if f.item_vat_rate == "0" %}selected{% endif %}>0%</option>
-                <option value="zw" {% if f.item_vat_rate == "zw" %}selected{% endif %}>Zwolniony</option>
+                <option value="zw" {% if f.item_vat_rate == "zw" %}selected{% endif %}>ZW (zwolniony)</option>
+                <option value="oo" {% if f.item_vat_rate == "oo" %}selected{% endif %}>OO (nie podlega)</option>
+                <option value="np" {% if f.item_vat_rate == "np" %}selected{% endif %}>NP (odwrotne obciazenie)</option>
               </select>
             </div>
           </div>
@@ -177,7 +184,7 @@
             : data.vat_status || 'Znaleziono';
           statusEl.className = 'form-hint text-success';
         } else {
-          statusEl.textContent = 'Nie znaleziono w rejestrze VAT — wpisz dane recznie';
+          statusEl.textContent = 'Nie znaleziono w rejestrze VAT — wpisz dane ręcznie';
           statusEl.className = 'form-hint text-warning';
         }
       })
@@ -218,10 +225,16 @@
           '<label>Stawka VAT</label>' +
           '<select name="items[' + idx + '][vat_rate]">' +
             '<option value="23" selected>23%</option>' +
+            '<option value="22">22% (historyczna)</option>' +
             '<option value="8">8%</option>' +
+            '<option value="7">7% (historyczna)</option>' +
             '<option value="5">5%</option>' +
+            '<option value="4">4%</option>' +
+            '<option value="3">3%</option>' +
             '<option value="0">0%</option>' +
-            '<option value="zw">Zwolniony</option>' +
+            '<option value="zw">ZW (zwolniony)</option>' +
+            '<option value="oo">OO (nie podlega)</option>' +
+            '<option value="np">NP (odwrotne obciazenie)</option>' +
           '</select>' +
         '</div>' +
       '</div>' +

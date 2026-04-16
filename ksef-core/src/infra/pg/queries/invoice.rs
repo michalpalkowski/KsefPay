@@ -7,6 +7,7 @@ use crate::domain::invoice::{
     LineItem, Money, Party, PaymentMethod,
 };
 use crate::domain::nip::Nip;
+use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 use crate::ports::invoice_repository::InvoiceFilter;
@@ -14,6 +15,7 @@ use crate::ports::invoice_repository::InvoiceFilter;
 #[derive(sqlx::FromRow)]
 pub(crate) struct InvoiceRow {
     pub id: uuid::Uuid,
+    pub nip_account_id: uuid::Uuid,
     pub direction: String,
     pub status: String,
     pub invoice_type: String,
@@ -84,6 +86,7 @@ impl InvoiceRow {
 
         Ok(Invoice {
             id: InvoiceId::from_uuid(self.id),
+            nip_account_id: NipAccountId::from_uuid(self.nip_account_id),
             direction,
             status,
             invoice_type,
@@ -141,22 +144,23 @@ pub async fn save<'e>(
 
     sqlx::query(
         r"INSERT INTO invoices (
-            id, direction, status, invoice_type, invoice_number, issue_date, sale_date,
+            id, nip_account_id, direction, status, invoice_type, invoice_number, issue_date, sale_date,
             corrected_invoice_number, correction_reason, original_ksef_number, advance_payment_date,
             seller_nip, seller_name, seller_country, seller_address_line1, seller_address_line2,
             buyer_nip, buyer_name, buyer_country, buyer_address_line1, buyer_address_line2,
             currency, line_items, total_net_grosze, total_vat_grosze, total_gross_grosze,
             payment_method, payment_deadline, bank_account, ksef_number, ksef_error, raw_xml
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            $8, $9, $10, $11,
-            $12, $13, $14, $15, $16,
-            $17, $18, $19, $20, $21,
-            $22, $23, $24, $25, $26, $27,
-            $28, $29, $30, $31, $32
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            $9, $10, $11, $12,
+            $13, $14, $15, $16, $17,
+            $18, $19, $20, $21, $22,
+            $23, $24, $25, $26, $27, $28,
+            $29, $30, $31, $32, $33
         )",
     )
     .bind(invoice.id.as_uuid())
+    .bind(invoice.nip_account_id.as_uuid())
     .bind(invoice.direction.to_string())
     .bind(invoice.status.to_string())
     .bind(invoice.invoice_type.to_string())
@@ -211,15 +215,18 @@ pub async fn save<'e>(
 pub async fn find_by_id<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
 ) -> Result<Invoice, RepositoryError> {
-    let row: InvoiceRow = sqlx::query_as("SELECT * FROM invoices WHERE id = $1")
-        .bind(id.as_uuid())
-        .fetch_optional(exec)
-        .await?
-        .ok_or_else(|| RepositoryError::NotFound {
-            entity: "Invoice",
-            id: id.to_string(),
-        })?;
+    let row: InvoiceRow =
+        sqlx::query_as("SELECT * FROM invoices WHERE id = $1 AND nip_account_id = $2")
+            .bind(id.as_uuid())
+            .bind(account_id.as_uuid())
+            .fetch_optional(exec)
+            .await?
+            .ok_or_else(|| RepositoryError::NotFound {
+                entity: "Invoice",
+                id: id.to_string(),
+            })?;
     row.into_domain()
 }
 
@@ -293,6 +300,21 @@ pub async fn find_by_ksef_number<'e>(
     row.map(InvoiceRow::into_domain).transpose()
 }
 
+pub async fn find_by_ksef_number_and_account<'e>(
+    exec: impl PgExecutor<'e>,
+    ksef_number: &KSeFNumber,
+    account_id: &NipAccountId,
+) -> Result<Option<Invoice>, RepositoryError> {
+    let row: Option<InvoiceRow> = sqlx::query_as(
+        "SELECT * FROM invoices WHERE ksef_number = $1 AND nip_account_id = $2",
+    )
+    .bind(ksef_number.as_str())
+    .bind(account_id.as_uuid())
+    .fetch_optional(exec)
+    .await?;
+    row.map(InvoiceRow::into_domain).transpose()
+}
+
 pub async fn upsert_by_ksef_number<'e>(
     exec: impl PgExecutor<'e>,
     invoice: &Invoice,
@@ -308,21 +330,21 @@ pub async fn upsert_by_ksef_number<'e>(
 
     let query = sqlx::query(
         r"INSERT INTO invoices (
-            id, direction, status, invoice_type, invoice_number, issue_date, sale_date,
+            id, nip_account_id, direction, status, invoice_type, invoice_number, issue_date, sale_date,
             corrected_invoice_number, correction_reason, original_ksef_number, advance_payment_date,
             seller_nip, seller_name, seller_country, seller_address_line1, seller_address_line2,
             buyer_nip, buyer_name, buyer_country, buyer_address_line1, buyer_address_line2,
             currency, line_items, total_net_grosze, total_vat_grosze, total_gross_grosze,
             payment_method, payment_deadline, bank_account, ksef_number, ksef_error, raw_xml
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            $8, $9, $10, $11,
-            $12, $13, $14, $15, $16,
-            $17, $18, $19, $20, $21,
-            $22, $23, $24, $25, $26, $27,
-            $28, $29, $30, $31, $32
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            $9, $10, $11, $12,
+            $13, $14, $15, $16, $17,
+            $18, $19, $20, $21, $22,
+            $23, $24, $25, $26, $27, $28,
+            $29, $30, $31, $32, $33
         )
-        ON CONFLICT (ksef_number) DO UPDATE SET
+        ON CONFLICT (ksef_number, nip_account_id) DO UPDATE SET
             direction = EXCLUDED.direction,
             status = EXCLUDED.status,
             invoice_type = EXCLUDED.invoice_type,
@@ -357,6 +379,7 @@ pub async fn upsert_by_ksef_number<'e>(
         RETURNING id",
     )
     .bind(invoice.id.as_uuid())
+    .bind(invoice.nip_account_id.as_uuid())
     .bind(invoice.direction.to_string())
     .bind(invoice.status.to_string())
     .bind(invoice.invoice_type.to_string())
@@ -403,8 +426,8 @@ pub async fn list<'e>(
     exec: impl PgExecutor<'e>,
     filter: &InvoiceFilter,
 ) -> Result<Vec<Invoice>, RepositoryError> {
-    let mut query = String::from("SELECT * FROM invoices WHERE 1=1");
-    let mut param_idx = 1u32;
+    let mut query = String::from("SELECT * FROM invoices WHERE nip_account_id = $1");
+    let mut param_idx = 2u32;
 
     if filter.direction.is_some() {
         write!(query, " AND direction = ${param_idx}").unwrap();
@@ -412,14 +435,6 @@ pub async fn list<'e>(
     }
     if filter.status.is_some() {
         write!(query, " AND status = ${param_idx}").unwrap();
-        param_idx += 1;
-    }
-    if filter.nip_seller.is_some() {
-        write!(query, " AND seller_nip = ${param_idx}").unwrap();
-        param_idx += 1;
-    }
-    if filter.nip_buyer.is_some() {
-        write!(query, " AND buyer_nip = ${param_idx}").unwrap();
     }
 
     query.push_str(" ORDER BY created_at DESC");
@@ -431,7 +446,7 @@ pub async fn list<'e>(
         write!(query, " OFFSET {offset}").unwrap();
     }
 
-    let mut q = sqlx::query_as::<_, InvoiceRow>(&query);
+    let mut q = sqlx::query_as::<_, InvoiceRow>(&query).bind(filter.account_id.as_uuid());
 
     if let Some(ref d) = filter.direction {
         q = q.bind(d.to_string());
@@ -439,13 +454,6 @@ pub async fn list<'e>(
     if let Some(ref s) = filter.status {
         q = q.bind(s.to_string());
     }
-    if let Some(ref nip) = filter.nip_seller {
-        q = q.bind(nip.as_str().to_string());
-    }
-    if let Some(ref nip) = filter.nip_buyer {
-        q = q.bind(nip.as_str().to_string());
-    }
-
     let rows: Vec<InvoiceRow> = q.fetch_all(exec).await?;
     rows.into_iter().map(InvoiceRow::into_domain).collect()
 }

@@ -1,18 +1,22 @@
 use askama::Template;
-use axum::Form;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::Utc;
 use serde::Deserialize;
 use tower_sessions::Session;
 
-use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
+use ksef_core::domain::audit::AuditAction;
 use ksef_core::domain::user::{User, UserId};
 
+use crate::audit_log::log_action as log_audit_action;
+use crate::csrf::ensure_csrf_token;
+use crate::extractors::CsrfForm;
+use crate::request_meta::client_ip;
 use crate::state::AppState;
 
 // --- Templates ---
@@ -22,6 +26,7 @@ use crate::state::AppState;
 struct LoginTemplate {
     error: Option<String>,
     email: String,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -29,6 +34,7 @@ struct LoginTemplate {
 struct RegisterTemplate {
     error: Option<String>,
     email: String,
+    csrf_token: String,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -51,6 +57,20 @@ fn render_with_status<T: Template>(status: StatusCode, tmpl: T) -> Response {
         )
             .into_response(),
     }
+}
+
+fn with_retry_after(mut response: Response, retry_after_seconds: u64) -> Response {
+    let header_value = HeaderValue::from_str(&retry_after_seconds.to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("60"));
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, header_value);
+    response
+}
+
+fn auth_rate_limit_retry_after(state: &AppState, headers: &HeaderMap) -> Option<u64> {
+    let key = client_ip(headers).unwrap_or_else(|| "unknown".to_string());
+    state.auth_rate_limiter.check(&key)
 }
 
 // --- Form data ---
@@ -92,16 +112,16 @@ fn is_valid_email(email: &str) -> bool {
 
 pub fn validate_password_strength(password: &str) -> Result<(), String> {
     if password.len() < 8 {
-        return Err("Haslo musi miec co najmniej 8 znakow".to_string());
+        return Err("Hasło musi mieć co najmniej 8 znaków".to_string());
     }
     if !password.chars().any(|c| c.is_ascii_uppercase()) {
-        return Err("Haslo musi zawierac co najmniej jedna duza litere".to_string());
+        return Err("Hasło musi zawierać co najmniej jedną dużą literę".to_string());
     }
     if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Err("Haslo musi zawierac co najmniej jedna cyfre".to_string());
+        return Err("Hasło musi zawierać co najmniej jedną cyfrę".to_string());
     }
     if !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
-        return Err("Haslo musi zawierac co najmniej jeden znak specjalny (np. !@#$%)".to_string());
+        return Err("Hasło musi zawierać co najmniej jeden znak specjalny (np. !@#$%)".to_string());
     }
     Ok(())
 }
@@ -113,24 +133,46 @@ pub async fn login_page(session: Session) -> Response {
     if let Ok(Some(_)) = session.get::<String>("user_id").await {
         return Redirect::to("/accounts").into_response();
     }
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     render(LoginTemplate {
         error: None,
         email: String::new(),
+        csrf_token,
     })
 }
 
 pub async fn login(
     State(state): State<AppState>,
     session: Session,
-    Form(form): Form<LoginFormData>,
+    headers: HeaderMap,
+    CsrfForm(form): CsrfForm<LoginFormData>,
 ) -> Response {
     let email = form.email.trim().to_lowercase();
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+
+    if let Some(retry_after) = auth_rate_limit_retry_after(&state, &headers) {
+        return with_retry_after(
+            render_with_status(
+                StatusCode::TOO_MANY_REQUESTS,
+                LoginTemplate {
+                    error: Some(format!(
+                        "Zbyt wiele prób logowania. Spróbuj ponownie za {retry_after} sekund."
+                    )),
+                    email,
+                    csrf_token,
+                },
+            ),
+            retry_after,
+        );
+    }
+
     if email.is_empty() || form.password.is_empty() {
         return render_with_status(
             StatusCode::BAD_REQUEST,
             LoginTemplate {
-                error: Some("Email i haslo sa wymagane".to_string()),
+                error: Some("Email i hasło są wymagane".to_string()),
                 email,
+                csrf_token,
             },
         );
     }
@@ -141,8 +183,9 @@ pub async fn login(
             return render_with_status(
                 StatusCode::UNAUTHORIZED,
                 LoginTemplate {
-                    error: Some("Nieprawidlowy email lub haslo".to_string()),
+                    error: Some("Nieprawidłowy email lub hasło".to_string()),
                     email,
+                    csrf_token,
                 },
             );
         }
@@ -150,8 +193,9 @@ pub async fn login(
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 LoginTemplate {
-                    error: Some(format!("Blad serwera: {e}")),
+                    error: Some(format!("Błąd serwera: {e}")),
                     email,
+                    csrf_token,
                 },
             );
         }
@@ -161,8 +205,9 @@ pub async fn login(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             LoginTemplate {
-                error: Some("Blad weryfikacji hasla".to_string()),
+                error: Some("Błąd weryfikacji hasła".to_string()),
                 email,
+                csrf_token,
             },
         );
     };
@@ -174,25 +219,35 @@ pub async fn login(
         return render_with_status(
             StatusCode::UNAUTHORIZED,
             LoginTemplate {
-                error: Some("Nieprawidlowy email lub haslo".to_string()),
+                error: Some("Nieprawidłowy email lub hasło".to_string()),
                 email,
+                csrf_token,
             },
         );
     }
 
     // Create session
-    if let Err(e) = session
-        .insert("user_id", user.id.to_string())
-        .await
-    {
+    if let Err(e) = session.insert("user_id", user.id.to_string()).await {
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             LoginTemplate {
-                error: Some(format!("Blad sesji: {e}")),
+                error: Some(format!("Błąd sesji: {e}")),
                 email,
+                csrf_token,
             },
         );
     }
+
+    log_audit_action(
+        &state,
+        &user.id,
+        &user.email,
+        None,
+        AuditAction::Login,
+        None,
+        client_ip(&headers),
+    )
+    .await;
 
     Redirect::to("/accounts").into_response()
 }
@@ -202,26 +257,47 @@ pub async fn register_page(session: Session) -> Response {
     if let Ok(Some(_)) = session.get::<String>("user_id").await {
         return Redirect::to("/accounts").into_response();
     }
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     render(RegisterTemplate {
         error: None,
         email: String::new(),
+        csrf_token,
     })
 }
 
 pub async fn register(
     State(state): State<AppState>,
     session: Session,
-    Form(form): Form<RegisterFormData>,
+    headers: HeaderMap,
+    CsrfForm(form): CsrfForm<RegisterFormData>,
 ) -> Response {
     let email = form.email.trim().to_lowercase();
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+
+    if let Some(retry_after) = auth_rate_limit_retry_after(&state, &headers) {
+        return with_retry_after(
+            render_with_status(
+                StatusCode::TOO_MANY_REQUESTS,
+                RegisterTemplate {
+                    error: Some(format!(
+                        "Zbyt wiele prób rejestracji. Spróbuj ponownie za {retry_after} sekund."
+                    )),
+                    email,
+                    csrf_token,
+                },
+            ),
+            retry_after,
+        );
+    }
 
     // Validate input
     if email.is_empty() || form.password.is_empty() {
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Email i haslo sa wymagane".to_string()),
+                error: Some("Email i hasło są wymagane".to_string()),
                 email,
+                csrf_token,
             },
         );
     }
@@ -230,8 +306,9 @@ pub async fn register(
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Nieprawidlowy adres email".to_string()),
+                error: Some("Nieprawidłowy adres email".to_string()),
                 email,
+                csrf_token,
             },
         );
     }
@@ -242,6 +319,7 @@ pub async fn register(
             RegisterTemplate {
                 error: Some(msg),
                 email,
+                csrf_token,
             },
         );
     }
@@ -250,8 +328,9 @@ pub async fn register(
         return render_with_status(
             StatusCode::BAD_REQUEST,
             RegisterTemplate {
-                error: Some("Hasla nie sa zgodne".to_string()),
+                error: Some("Hasła nie są zgodne".to_string()),
                 email,
+                csrf_token,
             },
         );
     }
@@ -262,8 +341,9 @@ pub async fn register(
             return render_with_status(
                 StatusCode::CONFLICT,
                 RegisterTemplate {
-                    error: Some("Konto z tym adresem email juz istnieje".to_string()),
+                    error: Some("Konto z tym adresem email już istnieje".to_string()),
                     email,
+                    csrf_token,
                 },
             );
         }
@@ -272,8 +352,9 @@ pub async fn register(
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 RegisterTemplate {
-                    error: Some(format!("Blad serwera: {e}")),
+                    error: Some(format!("Błąd serwera: {e}")),
                     email,
+                    csrf_token,
                 },
             );
         }
@@ -287,8 +368,9 @@ pub async fn register(
             return render_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 RegisterTemplate {
-                    error: Some(format!("Blad hashowania hasla: {e}")),
+                    error: Some(format!("Błąd hashowania hasła: {e}")),
                     email,
+                    csrf_token,
                 },
             );
         }
@@ -307,8 +389,9 @@ pub async fn register(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             RegisterTemplate {
-                error: Some(format!("Nie udalo sie utworzyc konta: {e}")),
+                error: Some(format!("Nie udało się utworzyć konta: {e}")),
                 email,
+                csrf_token,
             },
         );
     }
@@ -318,11 +401,23 @@ pub async fn register(
         return render_with_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             RegisterTemplate {
-                error: Some(format!("Blad sesji: {e}")),
+                error: Some(format!("Błąd sesji: {e}")),
                 email,
+                csrf_token,
             },
         );
     }
+
+    log_audit_action(
+        &state,
+        &user.id,
+        &user.email,
+        None,
+        AuditAction::Register,
+        None,
+        client_ip(&headers),
+    )
+    .await;
 
     Redirect::to("/accounts").into_response()
 }
