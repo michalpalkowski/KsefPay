@@ -49,6 +49,7 @@
 
     <div class="form-actions">
       <button type="submit" class="btn btn-primary" id="fetch-btn">Pobierz</button>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" class="btn">Historia pobran</a>
       <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-secondary">Anuluj</a>
     </div>
   </form>

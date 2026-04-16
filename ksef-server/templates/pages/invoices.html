@@ -11,6 +11,7 @@
     <div class="header-actions">
       {% if let Some(nip) = nip_prefix %}
       <a href="/accounts/{{ nip }}/invoices/fetch" class="btn">Pobierz z KSeF</a>
+      <a href="/accounts/{{ nip }}/invoices/fetch/history" class="btn">Historia pobran</a>
       <a href="/accounts/{{ nip }}/invoices/new" class="btn btn-primary">Nowa faktura</a>
       {% endif %}
     </div>
@@ -18,6 +19,20 @@
 
   {% if fetch_started %}
   <div class="alert alert-info" id="fetch-banner">Pobieranie faktur z KSeF w toku...</div>
+  {% else %}
+    {% if let Some(notice) = fetch_notice %}
+    <div class="alert {{ notice.class_name }}" id="fetch-banner">{{ notice.message }}</div>
+      {% if !notice.errors.is_empty() %}
+      <details class="fetch-errors" open>
+        <summary>Dlaczego nie udalo sie pobrac czesci faktur</summary>
+        <ul>
+          {% for err in notice.errors %}
+          <li>{{ err }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    {% endif %}
   {% endif %}
 
   <div class="tabs">
@@ -143,15 +158,29 @@
           clearInterval(poll);
           var msg = "Pobrano: " + data.inserted + " nowych, " + data.updated + " zaktualizowanych.";
           if (data.errors && data.errors.length > 0) {
-            msg += " Bledy (" + data.errors.length + "): " + data.errors.join("; ");
+            msg += " Bledy (" + data.errors.length + "). Szczegoly ponizej.";
             banner.className = "alert alert-error";
+            var details = document.createElement("details");
+            details.className = "fetch-errors";
+            details.open = true;
+            var summary = document.createElement("summary");
+            summary.textContent = "Dlaczego nie udalo sie pobrac czesci faktur";
+            details.appendChild(summary);
+            var list = document.createElement("ul");
+            data.errors.forEach(function(err) {
+              var li = document.createElement("li");
+              li.textContent = err;
+              list.appendChild(li);
+            });
+            details.appendChild(list);
+            banner.after(details);
           } else {
             banner.className = "alert alert-success";
+            setTimeout(function() {
+              window.location.href = "/accounts/" + nip + "/invoices?tab=incoming";
+            }, 3000);
           }
           banner.textContent = msg;
-          setTimeout(function() {
-            window.location.href = "/accounts/" + nip + "/invoices?tab=incoming";
-          }, 3000);
         } else if (data.status === "failed") {
           clearInterval(poll);
           banner.className = "alert alert-error";

@@ -1,0 +1,124 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Historia pobrań - KSeF Pay</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <div>
+      <h1>Historia pobrań</h1>
+      <p class="page-copy">Trwała historia prób pobierania faktur z KSeF</p>
+    </div>
+    <div class="header-actions">
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="btn">Nowe pobieranie</a>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-secondary">Faktury</a>
+    </div>
+  </div>
+
+  {% if let Some(err) = error %}
+  <div class="alert alert-error">{{ err }}</div>
+  {% endif %}
+
+  <form method="get" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" class="form-row-group" style="margin-bottom: 1rem;">
+    <div class="form-row">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        <option value="all" {% if status_filter == "all" %}selected{% endif %}>Wszystkie</option>
+        <option value="done" {% if status_filter == "done" %}selected{% endif %}>Zakonczone</option>
+        <option value="failed" {% if status_filter == "failed" %}selected{% endif %}>Niepowodzenia</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="q">Szukaj</label>
+      <input id="q" type="text" name="q" value="{{ q }}" placeholder="np. KSeF number albo parse failed" />
+    </div>
+    <div class="form-row" style="align-self: end;">
+      <button type="submit" class="btn btn-primary">Filtruj</button>
+    </div>
+  </form>
+
+  {% if rows.is_empty() %}
+  <div class="empty-state">
+    <p>Brak wpisów dla podanych filtrów.</p>
+  </div>
+  {% else %}
+  <div class="table-wrap">
+    <table class="invoice-table">
+      <thead>
+        <tr>
+          <th>Czas</th>
+          <th>Status</th>
+          <th>Nowe</th>
+          <th>Zaktualizowane</th>
+          <th>Błędy</th>
+          <th>Podsumowanie</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.timestamp }}</td>
+          <td>
+            {% if row.status_class == "success" %}
+            <span class="status-badge status-accepted">{{ row.status_label }}</span>
+            {% else %}
+            <span class="status-badge status-failed">{{ row.status_label }}</span>
+            {% endif %}
+          </td>
+          <td>{% match row.inserted %}{% when Some with (v) %}{{ v }}{% when None %}-{% endmatch %}</td>
+          <td>{% match row.updated %}{% when Some with (v) %}{{ v }}{% when None %}-{% endmatch %}</td>
+          <td>{{ row.error_count }}</td>
+          <td>
+            <div>{{ row.summary }}</div>
+            {% if !row.errors.is_empty() %}
+            <details>
+              <summary>Szczegóły błędów</summary>
+              <ul>
+                {% for err in row.errors %}
+                <li>{{ err }}</li>
+                {% endfor %}
+              </ul>
+            </details>
+            {% endif %}
+            {% match row.message %}
+              {% when Some with (m) %}
+                <div>{{ m }}</div>
+              {% when None %}
+            {% endmatch %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="form-actions" style="justify-content: space-between; margin-top: 1rem;">
+    <div>
+      {% if has_prev %}
+      <form method="get" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" style="display:inline;">
+        <input type="hidden" name="page" value="{{ prev_page }}" />
+        <input type="hidden" name="status" value="{{ status_filter }}" />
+        <input type="hidden" name="q" value="{{ q }}" />
+        <button type="submit" class="btn btn-secondary">Poprzednia</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <div>Strona {{ page }}</div>
+
+    <div>
+      {% if has_next %}
+      <form method="get" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" style="display:inline;">
+        <input type="hidden" name="page" value="{{ next_page }}" />
+        <input type="hidden" name="status" value="{{ status_filter }}" />
+        <input type="hidden" name="q" value="{{ q }}" />
+        <button type="submit" class="btn btn-secondary">Następna</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

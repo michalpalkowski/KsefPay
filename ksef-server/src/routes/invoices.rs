@@ -16,11 +16,12 @@ use ksef_core::error::RepositoryError;
 use ksef_core::ports::invoice_repository::InvoiceFilter;
 use ksef_core::services::invoice_service::{CreateInvoiceInput, InvoiceServiceError};
 
+use super::fetch::{FetchLogStatus, ParsedFetchLog, parse_fetch_log_details};
 use crate::audit_log::log_action as log_audit_action;
 use crate::csrf::ensure_csrf_token;
 use crate::extractors::{CsrfForm, NipContext};
 use crate::request_meta::client_ip;
-use crate::state::AppState;
+use crate::state::{AppState, FetchJobStatus};
 
 // --- Templates ---
 
@@ -34,6 +35,13 @@ struct InvoiceListTemplate {
     incoming: Vec<Invoice>,
     tab: String,
     fetch_started: bool,
+    fetch_notice: Option<FetchNoticeView>,
+}
+
+struct FetchNoticeView {
+    class_name: &'static str,
+    message: String,
+    errors: Vec<String>,
 }
 
 #[derive(Template)]
@@ -135,6 +143,49 @@ fn status_for_service_error(err: &InvoiceServiceError) -> StatusCode {
     }
 }
 
+fn fetch_notice_from_details(details: &str) -> Option<FetchNoticeView> {
+    let parsed = parse_fetch_log_details(details)?;
+    Some(fetch_notice_from_parsed(parsed))
+}
+
+fn fetch_notice_from_parsed(parsed: ParsedFetchLog) -> FetchNoticeView {
+    match parsed.status {
+        FetchLogStatus::Failed => {
+            let message = parsed
+                .message
+                .unwrap_or_else(|| "Pobieranie nie powiodlo sie".to_string());
+            FetchNoticeView {
+                class_name: "alert-error",
+                message: format!("Pobieranie nie powiodlo sie: {message}"),
+                errors: vec![],
+            }
+        }
+        FetchLogStatus::Done => {
+            let inserted = parsed.inserted.unwrap_or(0);
+            let updated = parsed.updated.unwrap_or(0);
+            let error_count = parsed.error_count;
+            let errors = parsed.errors;
+            let message = if error_count == 0 {
+                format!("Pobrano: {inserted} nowych, {updated} zaktualizowanych.")
+            } else {
+                format!(
+                    "Pobrano: {inserted} nowych, {updated} zaktualizowanych. Bledy: {}.",
+                    error_count
+                )
+            };
+            FetchNoticeView {
+                class_name: if error_count == 0 {
+                    "alert-success"
+                } else {
+                    "alert-error"
+                },
+                message,
+                errors,
+            }
+        }
+    }
+}
+
 // --- Form data ---
 
 #[derive(Clone, Deserialize)]
@@ -194,6 +245,36 @@ pub async fn list(
         .unwrap_or_else(|| "outgoing".to_string());
 
     let fetch_started = params.get("fetch").is_some_and(|v| v == "started");
+    let in_memory_status = {
+        let jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
+        jobs.get(&nip_ctx.account.id).cloned()
+    };
+    let fetch_notice = if fetch_started {
+        None
+    } else if matches!(in_memory_status, Some(FetchJobStatus::Running)) {
+        Some(FetchNoticeView {
+            class_name: "alert-info",
+            message: "Pobieranie faktur z KSeF w toku...".to_string(),
+            errors: vec![],
+        })
+    } else {
+        match state.audit_service.list_recent(200).await {
+            Ok(entries) => entries
+                .into_iter()
+                .find(|entry| {
+                    entry.action == AuditAction::FetchInvoices
+                        && entry
+                            .nip
+                            .as_ref()
+                            .is_some_and(|entry_nip| entry_nip == &nip_ctx.account.nip)
+                })
+                .and_then(|entry| entry.details.as_deref().and_then(fetch_notice_from_details)),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to read audit log for fetch notice");
+                None
+            }
+        }
+    };
 
     let (outgoing, incoming): (Vec<_>, Vec<_>) = invoices
         .into_iter()
@@ -207,6 +288,7 @@ pub async fn list(
         incoming,
         tab,
         fetch_started,
+        fetch_notice,
     })
 }
 
@@ -745,5 +827,39 @@ mod tests {
         assert_eq!(input.invoice_type, InvoiceType::Vat);
         assert!(input.corrected_invoice_number.is_none());
         assert!(input.correction_reason.is_none());
+    }
+
+    #[test]
+    fn fetch_notice_from_json_done_contains_errors() {
+        let details = r#"{"status":"done","inserted":3,"updated":1,"errors":["A: parse failed","B: fetch failed"]}"#;
+        let notice = fetch_notice_from_details(details).expect("notice");
+
+        assert_eq!(notice.class_name, "alert-error");
+        assert!(
+            notice
+                .message
+                .contains("Pobrano: 3 nowych, 1 zaktualizowanych")
+        );
+        assert_eq!(notice.errors.len(), 2);
+    }
+
+    #[test]
+    fn fetch_notice_from_json_failed() {
+        let details = r#"{"status":"failed","message":"KSeF timeout"}"#;
+        let notice = fetch_notice_from_details(details).expect("notice");
+
+        assert_eq!(notice.class_name, "alert-error");
+        assert!(notice.message.contains("KSeF timeout"));
+        assert!(notice.errors.is_empty());
+    }
+
+    #[test]
+    fn fetch_notice_from_legacy_details() {
+        let details = "inserted=43,updated=18,errors=2";
+        let notice = fetch_notice_from_details(details).expect("notice");
+
+        assert_eq!(notice.class_name, "alert-error");
+        assert!(notice.message.contains("43"));
+        assert!(notice.errors.is_empty());
     }
 }
