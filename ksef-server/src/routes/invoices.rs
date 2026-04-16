@@ -710,6 +710,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_form_legacy_22_percent_vat_rate() {
+        let mut form = base_form();
+        form.item_vat_rate = "22".to_string();
+        let input = parse_form_to_input(form).unwrap();
+        let item = &input.line_items[0];
+        assert_eq!(item.vat_amount.grosze(), 2_200);
+        assert_eq!(item.gross_value.grosze(), 12_200);
+    }
+
+    #[test]
+    fn parse_form_reverse_charge_vat_rate() {
+        let mut form = base_form();
+        form.item_vat_rate = "np".to_string();
+        let input = parse_form_to_input(form).unwrap();
+        let item = &input.line_items[0];
+        assert_eq!(item.vat_amount.grosze(), 0);
+        assert_eq!(item.gross_value.grosze(), item.net_value.grosze());
+    }
+
+    #[test]
     fn parse_form_zero_quantity_fails() {
         let mut form = base_form();
         form.item_quantity = "abc".to_string();
