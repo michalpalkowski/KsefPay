@@ -130,6 +130,23 @@ impl InvoiceRepository for MockInvoiceRepo {
             .cloned())
     }
 
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        let store = self.invoices.lock().unwrap();
+        Ok(store
+            .iter()
+            .find(|i| {
+                i.ksef_number
+                    .as_ref()
+                    .is_some_and(|n| n.as_str() == ksef_number.as_str())
+                    && &i.nip_account_id == account_id
+            })
+            .cloned())
+    }
+
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let ksef_num = invoice
@@ -141,9 +158,9 @@ impl InvoiceRepository for MockInvoiceRepo {
             i.ksef_number
                 .as_ref()
                 .is_some_and(|n| n.as_str() == ksef_num.as_str())
+                && i.nip_account_id == invoice.nip_account_id
         }) {
-            // Update all fields except id and status (don't regress status)
-            existing.nip_account_id = invoice.nip_account_id.clone();
+            // Update all fields except id and nip_account_id
             existing.direction = invoice.direction;
             existing.invoice_number = invoice.invoice_number.clone();
             existing.issue_date = invoice.issue_date;

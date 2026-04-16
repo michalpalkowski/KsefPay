@@ -66,6 +66,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/009_invoice_composite_ksef_key.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -140,6 +145,14 @@ impl InvoiceRepository for Db {
         ksef_number: &KSeFNumber,
     ) -> Result<Option<Invoice>, RepositoryError> {
         queries::invoice::find_by_ksef_number(&self.pool, ksef_number).await
+    }
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, account_id)
+            .await
     }
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         queries::invoice::upsert_by_ksef_number(&self.pool, invoice).await
@@ -407,6 +420,16 @@ impl InvoiceRepository for Tx {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::invoice::find_by_ksef_number(&mut **tx, ksef_number).await
+    }
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, account_id)
+            .await
     }
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         let mut guard = self.conn().await;

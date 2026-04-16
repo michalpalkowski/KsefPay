@@ -189,7 +189,7 @@ impl FetchService {
 
         let existing = self
             .repo
-            .find_by_ksef_number(ksef_number)
+            .find_by_ksef_number_and_account(ksef_number, account_id)
             .await
             .map_err(ProcessError::Database)?;
 

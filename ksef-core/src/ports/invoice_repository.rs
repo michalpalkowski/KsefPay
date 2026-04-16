@@ -75,6 +75,12 @@ pub trait InvoiceRepository: Send + Sync {
         ksef_number: &KSeFNumber,
     ) -> Result<Option<Invoice>, RepositoryError>;
 
+    async fn find_by_ksef_number_and_account(
+        &self,
+        ksef_number: &KSeFNumber,
+        account_id: &NipAccountId,
+    ) -> Result<Option<Invoice>, RepositoryError>;
+
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError>;
 
     async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError>;

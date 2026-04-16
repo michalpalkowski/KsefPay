@@ -334,6 +334,21 @@ pub async fn find_by_ksef_number<'e>(
     row.map(InvoiceRow::into_domain).transpose()
 }
 
+pub async fn find_by_ksef_number_and_account<'e>(
+    exec: impl SqliteExecutor<'e>,
+    ksef_number: &KSeFNumber,
+    account_id: &NipAccountId,
+) -> Result<Option<Invoice>, RepositoryError> {
+    let row: Option<InvoiceRow> = sqlx::query_as(
+        "SELECT * FROM invoices WHERE ksef_number = ?1 AND nip_account_id = ?2",
+    )
+    .bind(ksef_number.as_str())
+    .bind(account_id.as_uuid().to_string())
+    .fetch_optional(exec)
+    .await?;
+    row.map(InvoiceRow::into_domain).transpose()
+}
+
 pub async fn upsert_by_ksef_number<'e>(
     exec: impl SqliteExecutor<'e>,
     invoice: &Invoice,
@@ -363,8 +378,7 @@ pub async fn upsert_by_ksef_number<'e>(
             ?23, ?24, ?25, ?26, ?27, ?28,
             ?29, ?30, ?31, ?32, ?33
         )
-        ON CONFLICT (ksef_number) DO UPDATE SET
-            nip_account_id = excluded.nip_account_id,
+        ON CONFLICT (ksef_number, nip_account_id) DO UPDATE SET
             direction = excluded.direction,
             status = excluded.status,
             invoice_type = excluded.invoice_type,
