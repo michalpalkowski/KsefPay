@@ -245,8 +245,7 @@ impl InvoiceRepository for Db {
         ksef_number: &KSeFNumber,
         account_id: &NipAccountId,
     ) -> Result<Option<Invoice>, RepositoryError> {
-        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, account_id)
-            .await
+        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, account_id).await
     }
 
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
@@ -400,8 +399,7 @@ impl InvoiceRepository for Tx {
     ) -> Result<Option<Invoice>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, account_id)
-            .await
+        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, account_id).await
     }
 
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {

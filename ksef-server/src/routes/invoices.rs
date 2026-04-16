@@ -176,6 +176,10 @@ fn fetch_notice_from_parsed(parsed: ParsedFetchLog) -> FetchNoticeView {
             if error_count > 0 && errors.is_empty() {
                 message.push_str(" Szczegóły błędów nie są dostępne dla tego starszego wpisu.");
             }
+            let error_strings: Vec<String> = errors
+                .iter()
+                .map(|e| format!("{}: {}", e.ksef_number, e.error))
+                .collect();
             FetchNoticeView {
                 class_name: if error_count == 0 {
                     "alert-success"
@@ -183,7 +187,7 @@ fn fetch_notice_from_parsed(parsed: ParsedFetchLog) -> FetchNoticeView {
                     "alert-error"
                 },
                 message,
-                errors,
+                errors: error_strings,
             }
         }
     }
@@ -254,7 +258,7 @@ pub async fn list(
     };
     let fetch_notice = if fetch_started {
         None
-    } else if matches!(in_memory_status, Some(FetchJobStatus::Running)) {
+    } else if matches!(in_memory_status, Some(FetchJobStatus::Running { .. })) {
         Some(FetchNoticeView {
             class_name: "alert-info",
             message: "Pobieranie faktur z KSeF w toku...".to_string(),

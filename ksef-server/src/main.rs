@@ -184,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         fetch_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         auth_rate_limiter: auth_rate_limit::AuthRateLimiter::default(),
+        allowed_emails: config.allowed_emails,
         company_lookup_service,
         invoice_sequence: db.invoice_sequence.clone(),
         invoice_service,

@@ -10,8 +10,7 @@ use xsd_parser::generate;
 fn main() -> anyhow::Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let default_input = manifest_dir.join("schemas/fa3/2025-06-25-13775/schemat.xsd");
-    let default_output =
-        manifest_dir.join("src/infra/fa3/generated/v2025_06_25_13775.rs");
+    let default_output = manifest_dir.join("src/infra/fa3/generated/v2025_06_25_13775.rs");
 
     let input = std::env::args()
         .nth(1)

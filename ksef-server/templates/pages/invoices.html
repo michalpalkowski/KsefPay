@@ -154,7 +154,9 @@
     fetch("/accounts/" + nip + "/invoices/fetch/status")
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        if (data.status === "done") {
+        if (data.status === "running" && data.message) {
+          banner.textContent = "Pobieranie faktur z KSeF: " + data.message;
+        } else if (data.status === "done") {
           clearInterval(poll);
           var msg = "Pobrano: " + data.inserted + " nowych, " + data.updated + " zaktualizowanych.";
           if (data.errors && data.errors.length > 0) {
@@ -193,7 +195,7 @@
     if (banner.className.indexOf("alert-info") !== -1) {
       banner.textContent = "Pobieranie trwa dłużej niż oczekiwano. Odśwież stronę ręcznie.";
     }
-  }, 120000);
+  }, 600000);
 })();
 </script>
 {% endif %}

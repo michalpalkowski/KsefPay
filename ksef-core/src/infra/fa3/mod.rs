@@ -13,7 +13,7 @@ use crate::ports::invoice_xml::InvoiceXmlConverter;
 
 pub use parse::xml_to_invoice;
 pub use serialize::invoice_to_xml;
-pub use versioned_adapter::{current_adapter as current_fa3_adapter, Fa3VersionAdapter};
+pub use versioned_adapter::{Fa3VersionAdapter, current_adapter as current_fa3_adapter};
 pub use xsd_validator::Fa3XsdValidator;
 
 /// FA(3) adapter implementing the XML conversion port.

@@ -27,7 +27,9 @@ pub type ExportKeyStore = Arc<Mutex<HashMap<(NipAccountId, String), (Vec<u8>, Ve
 /// Status of a background fetch job.
 #[derive(Clone)]
 pub enum FetchJobStatus {
-    Running,
+    Running {
+        message: Option<String>,
+    },
     Done {
         inserted: u32,
         updated: u32,
@@ -65,4 +67,6 @@ pub struct AppState {
     pub fetch_jobs: FetchJobStore,
     /// Rate limiter for auth endpoints (`/login`, `/register`).
     pub auth_rate_limiter: AuthRateLimiter,
+    /// Allowlist of emails permitted to register. Empty = registration closed.
+    pub allowed_emails: Vec<String>,
 }

@@ -305,13 +305,12 @@ pub async fn find_by_ksef_number_and_account<'e>(
     ksef_number: &KSeFNumber,
     account_id: &NipAccountId,
 ) -> Result<Option<Invoice>, RepositoryError> {
-    let row: Option<InvoiceRow> = sqlx::query_as(
-        "SELECT * FROM invoices WHERE ksef_number = $1 AND nip_account_id = $2",
-    )
-    .bind(ksef_number.as_str())
-    .bind(account_id.as_uuid())
-    .fetch_optional(exec)
-    .await?;
+    let row: Option<InvoiceRow> =
+        sqlx::query_as("SELECT * FROM invoices WHERE ksef_number = $1 AND nip_account_id = $2")
+            .bind(ksef_number.as_str())
+            .bind(account_id.as_uuid())
+            .fetch_optional(exec)
+            .await?;
     row.map(InvoiceRow::into_domain).transpose()
 }
 

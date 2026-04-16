@@ -49,6 +49,10 @@ pub fn router() -> Router<AppState> {
             get(fetch::fetch_history),
         )
         .route(
+            "/accounts/{nip}/invoices/fetch/retry",
+            post(fetch::fetch_retry_invoice),
+        )
+        .route(
             "/accounts/{nip}/invoices/fetch/status",
             get(fetch::fetch_status),
         )

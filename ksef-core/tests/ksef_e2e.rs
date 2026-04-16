@@ -218,9 +218,7 @@ async fn fa3_xml_generation_produces_valid_xml() {
     println!("Generated FA(3) XML ({} bytes):", xml.as_bytes().len());
     println!("{xml_str}");
 
-    assert!(
-        xml_str.contains("http://crd.gov.pl/wzor/2025/06/25/13775/")
-    );
+    assert!(xml_str.contains("http://crd.gov.pl/wzor/2025/06/25/13775/"));
     assert!(xml_str.contains("<tns:Faktura") || xml_str.contains("<Faktura"));
     assert!(xml_str.contains("<tns:FaWiersz>") || xml_str.contains("<FaWiersz>"));
 }

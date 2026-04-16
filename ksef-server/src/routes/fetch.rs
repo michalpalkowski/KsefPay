@@ -13,7 +13,8 @@ use crate::extractors::{CsrfForm, NipContext};
 use crate::request_meta::client_ip;
 use crate::state::{AppState, FetchJobStatus};
 use ksef_core::domain::audit::AuditAction;
-use ksef_core::domain::session::{InvoiceQuery, SubjectType};
+use ksef_core::domain::invoice::Direction;
+use ksef_core::domain::session::{InvoiceQuery, KSeFNumber, SubjectType};
 
 // --- Templates ---
 
@@ -44,6 +45,14 @@ struct FetchHistoryTemplate {
     has_next: bool,
     prev_page: u32,
     next_page: u32,
+    csrf_token: String,
+    retry_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FetchErrorItem {
+    pub(crate) ksef_number: String,
+    pub(crate) error: String,
 }
 
 #[derive(Clone)]
@@ -56,9 +65,12 @@ struct FetchHistoryRowView {
     updated: Option<u32>,
     error_count: usize,
     summary: String,
-    errors: Vec<String>,
+    errors: Vec<FetchErrorItem>,
     missing_error_details: bool,
     message: Option<String>,
+    subject_type: String,
+    ok: u32,
+    total: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +85,9 @@ pub(crate) struct ParsedFetchLog {
     pub inserted: Option<u32>,
     pub updated: Option<u32>,
     pub error_count: u32,
-    pub errors: Vec<String>,
+    pub errors: Vec<FetchErrorItem>,
     pub message: Option<String>,
+    pub subject_type: Option<String>,
 }
 
 fn render<T: Template>(tmpl: T) -> Response {
@@ -117,6 +130,7 @@ pub struct FetchHistoryQuery {
     pub page: Option<u32>,
     pub status: Option<String>,
     pub q: Option<String>,
+    pub retry_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -125,7 +139,8 @@ struct FetchAuditDoneDetails {
     inserted: u32,
     updated: u32,
     error_count: u32,
-    errors: Vec<String>,
+    errors: Vec<FetchErrorItem>,
+    subject_type: String,
 }
 
 #[derive(Serialize)]
@@ -142,11 +157,13 @@ struct FetchAuditDetails {
     errors: Option<FetchAuditErrors>,
     error_count: Option<u32>,
     message: Option<String>,
+    subject_type: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FetchAuditErrors {
+    Structured(Vec<FetchErrorItem>),
     List(Vec<String>),
     Count(u32),
 }
@@ -176,14 +193,35 @@ pub(crate) fn parse_fetch_log_details(details: &str) -> Option<ParsedFetchLog> {
                     error_count: 0,
                     errors: vec![],
                     message: Some(message),
+                    subject_type: parsed.subject_type,
                 });
             }
             Some("done") | None => {
                 if let (Some(inserted), Some(updated)) = (parsed.inserted, parsed.updated) {
                     let (errors, counted_errors) = match parsed.errors {
-                        Some(FetchAuditErrors::List(values)) => {
-                            let count = values.len() as u32;
-                            (values, count)
+                        Some(FetchAuditErrors::Structured(items)) => {
+                            let count = items.len() as u32;
+                            (items, count)
+                        }
+                        Some(FetchAuditErrors::List(strings)) => {
+                            let items: Vec<FetchErrorItem> = strings
+                                .into_iter()
+                                .map(|s| {
+                                    if let Some((kn, err)) = s.split_once(": ") {
+                                        FetchErrorItem {
+                                            ksef_number: kn.to_string(),
+                                            error: err.to_string(),
+                                        }
+                                    } else {
+                                        FetchErrorItem {
+                                            ksef_number: s,
+                                            error: "Nieznany błąd".to_string(),
+                                        }
+                                    }
+                                })
+                                .collect();
+                            let count = items.len() as u32;
+                            (items, count)
                         }
                         Some(FetchAuditErrors::Count(count)) => (vec![], count),
                         None => (vec![], 0),
@@ -199,6 +237,7 @@ pub(crate) fn parse_fetch_log_details(details: &str) -> Option<ParsedFetchLog> {
                         error_count,
                         errors,
                         message: None,
+                        subject_type: parsed.subject_type,
                     });
                 }
             }
@@ -218,6 +257,7 @@ pub(crate) fn parse_fetch_log_details(details: &str) -> Option<ParsedFetchLog> {
         error_count,
         errors: vec![],
         message: None,
+        subject_type: None,
     })
 }
 
@@ -247,6 +287,7 @@ const FETCH_HISTORY_PAGE_SIZE: usize = 20;
 pub async fn fetch_history(
     State(state): State<AppState>,
     nip_ctx: NipContext,
+    session: Session,
     Query(query): Query<FetchHistoryQuery>,
 ) -> impl IntoResponse {
     let mut page = query.page.unwrap_or(1).max(1);
@@ -258,6 +299,8 @@ pub async fn fetch_history(
         .unwrap_or_else(|| "all".to_string());
     let q = query.q.unwrap_or_default().trim().to_string();
     let q_lower = q.to_ascii_lowercase();
+    let retry_error = query.retry_error;
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
     let entries = match state
         .audit_service
@@ -279,6 +322,8 @@ pub async fn fetch_history(
                 has_next: false,
                 prev_page: 1,
                 next_page: 1,
+                csrf_token,
+                retry_error,
             });
         }
     };
@@ -314,6 +359,9 @@ pub async fn fetch_history(
                         } else {
                             Some(raw_details)
                         },
+                        subject_type: "subject2".to_string(),
+                        ok: 0,
+                        total: 0,
                     });
                 }
             };
@@ -345,6 +393,13 @@ pub async fn fetch_history(
             };
             let missing_error_details = has_errors && parsed.errors.is_empty();
 
+            let ok = parsed.inserted.unwrap_or(0) + parsed.updated.unwrap_or(0);
+            let total = ok + parsed.error_count;
+            let subject_type = parsed
+                .subject_type
+                .clone()
+                .unwrap_or_else(|| "subject2".to_string());
+
             Some(FetchHistoryRowView {
                 timestamp: entry.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
                 status_label: status_label.to_string(),
@@ -360,6 +415,9 @@ pub async fn fetch_history(
                 errors: parsed.errors,
                 missing_error_details,
                 message: parsed.message,
+                subject_type,
+                ok,
+                total,
             })
         })
         .collect();
@@ -370,10 +428,10 @@ pub async fn fetch_history(
     if !q_lower.is_empty() {
         rows.retain(|row| {
             row.summary.to_ascii_lowercase().contains(&q_lower)
-                || row
-                    .errors
-                    .iter()
-                    .any(|err| err.to_ascii_lowercase().contains(&q_lower))
+                || row.errors.iter().any(|err| {
+                    err.ksef_number.to_ascii_lowercase().contains(&q_lower)
+                        || err.error.to_ascii_lowercase().contains(&q_lower)
+                })
                 || row
                     .message
                     .as_ref()
@@ -412,6 +470,8 @@ pub async fn fetch_history(
         has_next: page < total_pages,
         prev_page: page.saturating_sub(1).max(1),
         next_page: page + 1,
+        csrf_token,
+        retry_error,
     })
 }
 
@@ -451,6 +511,7 @@ pub async fn fetch_execute(
         );
     }
 
+    let subject_type_str = form.subject_type.clone();
     let subject_type: SubjectType = match form.subject_type.parse() {
         Ok(st) => st,
         Err(e) => {
@@ -472,7 +533,7 @@ pub async fn fetch_execute(
     // Prevent duplicate background jobs for the same account.
     {
         let mut jobs = state.fetch_jobs.lock().expect("fetch_jobs lock");
-        if matches!(jobs.get(&account_id), Some(FetchJobStatus::Running)) {
+        if matches!(jobs.get(&account_id), Some(FetchJobStatus::Running { .. })) {
             return render_form_error(
                 nip_str,
                 user_email,
@@ -480,7 +541,10 @@ pub async fn fetch_execute(
                 csrf_token,
             );
         }
-        jobs.insert(account_id.clone(), FetchJobStatus::Running);
+        jobs.insert(
+            account_id.clone(),
+            FetchJobStatus::Running { message: None },
+        );
     }
 
     let nip = nip_ctx.account.nip.clone();
@@ -493,9 +557,23 @@ pub async fn fetch_execute(
     let audit_nip = account_nip;
     let audit_ip = ip_address;
 
+    let fetch_jobs_progress = fetch_jobs.clone();
+    let job_key_progress = job_key.clone();
+
     tokio::spawn(async move {
+        let on_progress = move |msg: &str| {
+            if let Ok(mut jobs) = fetch_jobs_progress.lock() {
+                jobs.insert(
+                    job_key_progress.clone(),
+                    FetchJobStatus::Running {
+                        message: Some(msg.to_string()),
+                    },
+                );
+            }
+        };
+
         match fetch_service
-            .fetch_invoices(&nip, &account_id, &query)
+            .fetch_invoices_with_progress(&nip, &account_id, &query, on_progress)
             .await
         {
             Ok(result) => {
@@ -519,6 +597,14 @@ pub async fn fetch_execute(
                     .iter()
                     .map(|e| format!("{}: {}", e.ksef_number, e.error))
                     .collect();
+                let error_items: Vec<FetchErrorItem> = result
+                    .errors
+                    .iter()
+                    .map(|e| FetchErrorItem {
+                        ksef_number: e.ksef_number.to_string(),
+                        error: e.error.to_string(),
+                    })
+                    .collect();
                 {
                     let mut jobs = fetch_jobs.lock().expect("fetch_jobs lock");
                     jobs.insert(
@@ -541,8 +627,9 @@ pub async fn fetch_execute(
                             status: "done",
                             inserted: result.inserted,
                             updated: result.updated,
-                            error_count: error_msgs.len() as u32,
-                            errors: error_msgs.clone(),
+                            error_count: error_items.len() as u32,
+                            errors: error_items,
+                            subject_type: subject_type_str,
                         })
                         .ok(),
                         audit_ip.clone(),
@@ -583,6 +670,58 @@ pub async fn fetch_execute(
     Redirect::to(&format!("/accounts/{nip_str}/invoices?fetch=started")).into_response()
 }
 
+// --- Retry single invoice ---
+
+#[derive(Deserialize)]
+pub struct FetchSingleData {
+    pub ksef_number: String,
+    pub subject_type: String,
+}
+
+pub async fn fetch_retry_invoice(
+    State(state): State<AppState>,
+    nip_ctx: NipContext,
+    _headers: HeaderMap,
+    CsrfForm(form): CsrfForm<FetchSingleData>,
+) -> Response {
+    let nip = nip_ctx.account.nip.clone();
+    let account_id = nip_ctx.account.id.clone();
+    let nip_str = nip.to_string();
+
+    let subject_type: SubjectType = match form.subject_type.parse() {
+        Ok(st) => st,
+        Err(_) => {
+            return Redirect::to(&format!(
+                "/accounts/{nip_str}/invoices/fetch/history?retry_error=Nieprawid%C5%82owy+typ+podmiotu"
+            ))
+            .into_response();
+        }
+    };
+    let direction: Direction = subject_type.to_direction();
+    let ksef_number = KSeFNumber::new(form.ksef_number.clone());
+
+    match state
+        .fetch_service
+        .retry_invoice(&nip, &account_id, &ksef_number, direction)
+        .await
+    {
+        Ok(_was_update) => {
+            let tab = match subject_type {
+                SubjectType::Subject1 => "outgoing",
+                _ => "incoming",
+            };
+            Redirect::to(&format!("/accounts/{nip_str}/invoices?tab={tab}")).into_response()
+        }
+        Err(e) => {
+            let msg = e.to_string().replace(' ', "+");
+            Redirect::to(&format!(
+                "/accounts/{nip_str}/invoices/fetch/history?retry_error={msg}"
+            ))
+            .into_response()
+        }
+    }
+}
+
 /// JSON endpoint for polling fetch job status.
 pub async fn fetch_status(
     State(state): State<AppState>,
@@ -595,12 +734,12 @@ pub async fn fetch_status(
     };
 
     match status {
-        Some(FetchJobStatus::Running) => Json(FetchStatusResponse {
+        Some(FetchJobStatus::Running { message }) => Json(FetchStatusResponse {
             status: "running".to_string(),
             inserted: None,
             updated: None,
             errors: None,
-            message: None,
+            message,
         }),
         Some(FetchJobStatus::Done {
             inserted,

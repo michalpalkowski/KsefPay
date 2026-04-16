@@ -7,6 +7,8 @@ pub struct Config {
     pub ksef_environment: KSeFEnvironment,
     pub ksef_cert_pem: Option<String>,
     pub ksef_key_pem: Option<String>,
+    /// Allowlist of emails permitted to register. Empty = registration closed.
+    pub allowed_emails: Vec<String>,
 }
 
 impl Config {
@@ -28,6 +30,13 @@ impl Config {
         let ksef_cert_pem = std::env::var("KSEF_CERT_PEM").ok();
         let ksef_key_pem = std::env::var("KSEF_KEY_PEM").ok();
 
+        let allowed_emails = std::env::var("ALLOWED_EMAILS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         Ok(Self {
             database_url,
             server_host,
@@ -35,6 +44,7 @@ impl Config {
             ksef_environment,
             ksef_cert_pem,
             ksef_key_pem,
+            allowed_emails,
         })
     }
 }

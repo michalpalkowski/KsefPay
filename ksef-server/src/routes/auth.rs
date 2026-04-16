@@ -313,6 +313,20 @@ pub async fn register(
         );
     }
 
+    // Allowlist check: empty list = registration closed entirely
+    if state.allowed_emails.is_empty() || !state.allowed_emails.contains(&email) {
+        return render_with_status(
+            StatusCode::FORBIDDEN,
+            RegisterTemplate {
+                error: Some(
+                    "Rejestracja jest zamknięta. Skontaktuj się z administratorem.".to_string(),
+                ),
+                email,
+                csrf_token,
+            },
+        );
+    }
+
     if let Err(msg) = validate_password_strength(&form.password) {
         return render_with_status(
             StatusCode::BAD_REQUEST,

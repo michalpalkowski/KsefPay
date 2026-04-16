@@ -21,6 +21,10 @@
   <div class="alert alert-error">{{ err }}</div>
   {% endif %}
 
+  {% if let Some(retry_err) = retry_error %}
+  <div class="alert alert-error">Błąd ponownego pobierania: {{ retry_err }}</div>
+  {% endif %}
+
   <form method="get" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" class="form-row-group" style="margin-bottom: 1rem;">
     <div class="form-row">
       <label for="status">Status</label>
@@ -71,13 +75,28 @@
           <td>{% match row.updated %}{% when Some with (v) %}{{ v }}{% when None %}-{% endmatch %}</td>
           <td>{{ row.error_count }}</td>
           <td>
-            <div>{{ row.summary }}</div>
+            <div>
+              {% if row.total > 0 %}
+                Pobrano: {{ row.ok }}/{{ row.total }}{% if row.error_count > 0 %} ({{ row.error_count }} z błędem){% endif %}
+              {% else %}
+                {{ row.summary }}
+              {% endif %}
+            </div>
             {% if !row.errors.is_empty() %}
             <details>
-              <summary>Szczegóły błędów</summary>
-              <ul>
+              <summary>Błędy ({{ row.error_count }})</summary>
+              <ul class="error-list">
                 {% for err in row.errors %}
-                <li>{{ err }}</li>
+                <li>
+                  <span class="error-ksef-num">{{ err.ksef_number }}</span>
+                  <span class="error-msg">{{ err.error }}</span>
+                  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/retry" style="display:inline;">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+                    <input type="hidden" name="ksef_number" value="{{ err.ksef_number }}" />
+                    <input type="hidden" name="subject_type" value="{{ row.subject_type }}" />
+                    <button type="submit" class="btn btn-sm btn-secondary">Pobierz ponownie</button>
+                  </form>
+                </li>
                 {% endfor %}
               </ul>
             </details>

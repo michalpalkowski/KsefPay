@@ -13,7 +13,7 @@ use crate::ports::ksef_client::KSeFClient;
 use crate::services::session_service::{SessionService, SessionServiceError};
 use tracing::{debug, warn};
 
-const QUERY_RATE_LIMIT_MAX_RETRIES: u32 = 3;
+const QUERY_RATE_LIMIT_MAX_RETRIES: u32 = 10;
 const MIN_RATE_LIMIT_WAIT_MS: u64 = 1_000;
 
 /// Orchestrates fetching invoices from `KSeF`: query -> download -> parse -> upsert.
@@ -62,6 +62,9 @@ pub enum FetchServiceError {
 
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+
+    #[error("invoice processing failed: {0}")]
+    Process(ProcessError),
 }
 
 impl FetchService {
@@ -81,29 +84,46 @@ impl FetchService {
     }
 
     /// Fetch invoices from `KSeF` for the given query and NIP.
-    ///
-    /// 1. Authenticate (ensure valid access token for this NIP)
-    /// 2. Query invoice metadata from `KSeF`
-    /// 3. For each invoice: download XML, parse, upsert to DB
-    ///
-    /// One failed invoice doesn't abort the batch — errors are collected in `FetchResult.errors`.
+    /// Delegates to [`Self::fetch_invoices_with_progress`] with a no-op progress callback.
     pub async fn fetch_invoices(
         &self,
         nip: &Nip,
         account_id: &NipAccountId,
         query: &InvoiceQuery,
     ) -> Result<FetchResult, FetchServiceError> {
+        self.fetch_invoices_with_progress(nip, account_id, query, |_| {})
+            .await
+    }
+
+    /// Fetch invoices from `KSeF` for the given query and NIP.
+    ///
+    /// 1. Authenticate (ensure valid access token for this NIP)
+    /// 2. Query invoice metadata from `KSeF` (retries on rate-limit, calls `on_progress`)
+    /// 3. For each invoice: download XML, parse, upsert to DB
+    ///
+    /// One failed invoice doesn't abort the batch — errors are collected in `FetchResult.errors`.
+    pub async fn fetch_invoices_with_progress(
+        &self,
+        nip: &Nip,
+        account_id: &NipAccountId,
+        query: &InvoiceQuery,
+        on_progress: impl Fn(&str) + Send,
+    ) -> Result<FetchResult, FetchServiceError> {
         let token_pair = self.session_service.ensure_token(nip).await?;
         let metadata_list = self
-            .query_metadata_with_rate_limit_retry(&token_pair.access_token, query)
+            .query_metadata_with_rate_limit_retry(&token_pair.access_token, query, &on_progress)
             .await?;
 
         let direction = query.subject_type.to_direction();
+        let total = metadata_list.len();
+        let mut done = 0usize;
         let mut result = FetchResult {
             inserted: 0,
             updated: 0,
             errors: Vec::new(),
         };
+
+        on_progress(&format!("Pobieranie faktur 0/{total}"));
 
         for metadata in &metadata_list {
             match self
@@ -116,6 +136,8 @@ impl FetchService {
                 .await
             {
                 Ok(was_update) => {
+                    done += 1;
+                    on_progress(&format!("Pobieranie faktur {done}/{total}"));
                     if was_update {
                         result.updated += 1;
                     } else {
@@ -123,6 +145,8 @@ impl FetchService {
                     }
                 }
                 Err(err) => {
+                    done += 1;
+                    on_progress(&format!("Pobieranie faktur {done}/{total}"));
                     result.errors.push(FetchItemError {
                         ksef_number: metadata.ksef_number.clone(),
                         error: err,
@@ -134,10 +158,28 @@ impl FetchService {
         Ok(result)
     }
 
+    /// Retry fetching a single invoice by its `KSeF` number.
+    ///
+    /// Authenticates, then delegates to [`Self::process_single_invoice`].
+    /// Returns `true` if the invoice was already present (update), `false` if newly inserted.
+    pub async fn retry_invoice(
+        &self,
+        nip: &Nip,
+        account_id: &NipAccountId,
+        ksef_number: &KSeFNumber,
+        direction: Direction,
+    ) -> Result<bool, FetchServiceError> {
+        let token_pair = self.session_service.ensure_token(nip).await?;
+        self.process_single_invoice(&token_pair.access_token, account_id, ksef_number, direction)
+            .await
+            .map_err(FetchServiceError::Process)
+    }
+
     async fn query_metadata_with_rate_limit_retry(
         &self,
         access_token: &crate::domain::auth::AccessToken,
         query: &InvoiceQuery,
+        on_progress: &impl Fn(&str),
     ) -> Result<Vec<crate::domain::session::InvoiceMetadata>, KSeFError> {
         let mut retries_done = 0u32;
 
@@ -155,6 +197,10 @@ impl FetchService {
                         max_retries = QUERY_RATE_LIMIT_MAX_RETRIES,
                         "KSeF query rate-limited, waiting before retry"
                     );
+                    let wait_secs = wait_ms.div_ceil(1000);
+                    on_progress(&format!(
+                        "KSeF rate limit – czekam {wait_secs}s (próba {retries_done}/{QUERY_RATE_LIMIT_MAX_RETRIES})"
+                    ));
                     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
                 }
                 Err(err) => return Err(err),
