@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 
 use ksef_core::infra::batch::zip_builder::BatchFileBuilder;
 use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslSignerFactory, OpenSslXadesSigner};
-use ksef_core::infra::fa3::Fa3XmlConverter;
+use ksef_core::infra::fa3::{Fa3XmlConverter, Fa3XsdValidator};
 use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
 use ksef_core::infra::ksef::KSeFApiClient;
@@ -123,6 +123,10 @@ async fn main() -> anyhow::Result<()> {
     let encryptor = Arc::new(AesCbcEncryptor);
     let decryptor = Arc::new(AesCbcEncryptor);
     let xml_converter = Arc::new(Fa3XmlConverter);
+    let xml_validator = Arc::new(Fa3XsdValidator::new());
+    xml_validator
+        .warm_up()
+        .map_err(|e| anyhow::anyhow!("failed to initialize FA(3) XSD validator: {e}"))?;
     let qr_renderer = Arc::new(QRCodeGenerator);
 
     let fetch_service = Arc::new(FetchService::new(
@@ -165,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         ksef.clone(),
         encryptor,
         xml_converter,
+        xml_validator,
         Duration::from_secs(2),
     ));
 

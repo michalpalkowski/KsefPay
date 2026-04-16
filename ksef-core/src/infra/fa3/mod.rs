@@ -1,5 +1,6 @@
 mod parse;
 mod serialize;
+mod xsd_validator;
 
 use crate::domain::invoice::{Direction, Invoice};
 use crate::domain::session::KSeFNumber;
@@ -9,6 +10,7 @@ use crate::ports::invoice_xml::InvoiceXmlConverter;
 
 pub use parse::xml_to_invoice;
 pub use serialize::invoice_to_xml;
+pub use xsd_validator::Fa3XsdValidator;
 
 /// FA(3) adapter implementing the XML conversion port.
 pub struct Fa3XmlConverter;

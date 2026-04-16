@@ -7,6 +7,7 @@ pub mod invoice_decryptor;
 pub mod invoice_repository;
 pub mod invoice_sequence;
 pub mod invoice_xml;
+pub mod invoice_xml_validator;
 pub mod job_queue;
 pub mod ksef_auth;
 pub mod ksef_auth_sessions;
