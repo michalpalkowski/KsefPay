@@ -153,10 +153,10 @@ fn fetch_notice_from_parsed(parsed: ParsedFetchLog) -> FetchNoticeView {
         FetchLogStatus::Failed => {
             let message = parsed
                 .message
-                .unwrap_or_else(|| "Pobieranie nie powiodlo sie".to_string());
+                .unwrap_or_else(|| "Pobieranie nie powiodło się".to_string());
             FetchNoticeView {
                 class_name: "alert-error",
-                message: format!("Pobieranie nie powiodlo sie: {message}"),
+                message: format!("Pobieranie nie powiodło się: {message}"),
                 errors: vec![],
             }
         }
@@ -165,14 +165,17 @@ fn fetch_notice_from_parsed(parsed: ParsedFetchLog) -> FetchNoticeView {
             let updated = parsed.updated.unwrap_or(0);
             let error_count = parsed.error_count;
             let errors = parsed.errors;
-            let message = if error_count == 0 {
+            let mut message = if error_count == 0 {
                 format!("Pobrano: {inserted} nowych, {updated} zaktualizowanych.")
             } else {
                 format!(
-                    "Pobrano: {inserted} nowych, {updated} zaktualizowanych. Bledy: {}.",
+                    "Pobrano: {inserted} nowych, {updated} zaktualizowanych. Błędy: {}.",
                     error_count
                 )
             };
+            if error_count > 0 && errors.is_empty() {
+                message.push_str(" Szczegóły błędów nie są dostępne dla tego starszego wpisu.");
+            }
             FetchNoticeView {
                 class_name: if error_count == 0 {
                     "alert-success"

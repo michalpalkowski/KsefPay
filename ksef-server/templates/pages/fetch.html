@@ -39,17 +39,17 @@
     </div>
 
     <div class="form-group">
-      <label>Szybki wybor</label>
+      <label>Szybki wybór</label>
       <div class="preset-buttons">
-        <button type="button" onclick="setPreset('today')">Dzisiaj</button>
-        <button type="button" onclick="setPreset('week')">Ostatni tydzień</button>
-        <button type="button" onclick="setPreset('month')">Ostatni miesiąc</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setPreset('today')">Dzisiaj</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setPreset('week')">Ostatni tydzień</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setPreset('month')">Ostatni miesiąc</button>
       </div>
     </div>
 
     <div class="form-actions">
       <button type="submit" class="btn btn-primary" id="fetch-btn">Pobierz</button>
-      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" class="btn">Historia pobran</a>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch/history" class="btn btn-secondary">Historia pobrań</a>
       <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-secondary">Anuluj</a>
     </div>
   </form>
@@ -61,7 +61,7 @@
 document.querySelector('form').addEventListener('submit', function() {
   var btn = document.getElementById('fetch-btn');
   btn.disabled = true;
-  btn.textContent = 'Pobieranie...';
+  btn.textContent = 'Pobieranie…';
 });
 function setPreset(preset) {
   const today = new Date();

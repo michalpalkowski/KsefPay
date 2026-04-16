@@ -12,7 +12,7 @@
       <p class="page-copy">Trwała historia prób pobierania faktur z KSeF</p>
     </div>
     <div class="header-actions">
-      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="btn">Nowe pobieranie</a>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices/fetch" class="btn btn-primary">Nowe pobieranie</a>
       <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/invoices" class="btn btn-secondary">Faktury</a>
     </div>
   </div>
@@ -26,13 +26,13 @@
       <label for="status">Status</label>
       <select id="status" name="status">
         <option value="all" {% if status_filter == "all" %}selected{% endif %}>Wszystkie</option>
-        <option value="done" {% if status_filter == "done" %}selected{% endif %}>Zakonczone</option>
+        <option value="done" {% if status_filter == "done" %}selected{% endif %}>Zakończone</option>
         <option value="failed" {% if status_filter == "failed" %}selected{% endif %}>Niepowodzenia</option>
       </select>
     </div>
     <div class="form-row">
       <label for="q">Szukaj</label>
-      <input id="q" type="text" name="q" value="{{ q }}" placeholder="np. KSeF number albo parse failed" />
+      <input id="q" type="text" name="q" value="{{ q }}" placeholder="np. numer KSeF albo parse failed" />
     </div>
     <div class="form-row" style="align-self: end;">
       <button type="submit" class="btn btn-primary">Filtruj</button>
@@ -81,6 +81,9 @@
                 {% endfor %}
               </ul>
             </details>
+            {% endif %}
+            {% if row.missing_error_details %}
+            <div class="hint">Szczegóły błędów nie zostały zapisane dla tego starszego wpisu.</div>
             {% endif %}
             {% match row.message %}
               {% when Some with (m) %}

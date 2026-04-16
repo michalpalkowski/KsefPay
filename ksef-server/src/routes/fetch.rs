@@ -50,12 +50,14 @@ struct FetchHistoryTemplate {
 struct FetchHistoryRowView {
     timestamp: String,
     status_label: String,
+    status_key: String,
     status_class: String,
     inserted: Option<u32>,
     updated: Option<u32>,
     error_count: usize,
     summary: String,
     errors: Vec<String>,
+    missing_error_details: bool,
     message: Option<String>,
 }
 
@@ -122,6 +124,7 @@ struct FetchAuditDoneDetails {
     status: &'static str,
     inserted: u32,
     updated: u32,
+    error_count: u32,
     errors: Vec<String>,
 }
 
@@ -136,8 +139,16 @@ struct FetchAuditDetails {
     status: Option<String>,
     inserted: Option<u32>,
     updated: Option<u32>,
-    errors: Option<Vec<String>>,
+    errors: Option<FetchAuditErrors>,
+    error_count: Option<u32>,
     message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FetchAuditErrors {
+    List(Vec<String>),
+    Count(u32),
 }
 
 fn parse_legacy_fetch_metric(details: &str, key: &str) -> Option<u32> {
@@ -157,7 +168,7 @@ pub(crate) fn parse_fetch_log_details(details: &str) -> Option<ParsedFetchLog> {
             Some("failed") => {
                 let message = parsed
                     .message
-                    .unwrap_or_else(|| "Pobieranie nie powiodlo sie".to_string());
+                    .unwrap_or_else(|| "Pobieranie nie powiodło się".to_string());
                 return Some(ParsedFetchLog {
                     status: FetchLogStatus::Failed,
                     inserted: None,
@@ -169,12 +180,23 @@ pub(crate) fn parse_fetch_log_details(details: &str) -> Option<ParsedFetchLog> {
             }
             Some("done") | None => {
                 if let (Some(inserted), Some(updated)) = (parsed.inserted, parsed.updated) {
-                    let errors = parsed.errors.unwrap_or_default();
+                    let (errors, counted_errors) = match parsed.errors {
+                        Some(FetchAuditErrors::List(values)) => {
+                            let count = values.len() as u32;
+                            (values, count)
+                        }
+                        Some(FetchAuditErrors::Count(count)) => (vec![], count),
+                        None => (vec![], 0),
+                    };
+                    let error_count = parsed
+                        .error_count
+                        .unwrap_or(counted_errors)
+                        .max(counted_errors);
                     return Some(ParsedFetchLog {
                         status: FetchLogStatus::Done,
                         inserted: Some(inserted),
                         updated: Some(updated),
-                        error_count: errors.len() as u32,
+                        error_count,
                         errors,
                         message: None,
                     });
@@ -248,7 +270,7 @@ pub async fn fetch_history(
                 active: "/fetch-history",
                 nip_prefix: Some(nip_ctx.account.nip.to_string()),
                 user_email: nip_ctx.user.email,
-                error: Some(format!("Nie udalo sie odczytac historii pobran: {err}")),
+                error: Some(format!("Nie udało się odczytać historii pobrań: {err}")),
                 rows: vec![],
                 status_filter,
                 q,
@@ -271,13 +293,35 @@ pub async fn fetch_history(
                     .is_some_and(|entry_nip| entry_nip == &nip_ctx.account.nip)
         })
         .filter_map(|entry| {
-            let details = entry.details.as_deref()?;
-            let parsed = parse_fetch_log_details(details)?;
+            let raw_details = entry.details.clone().unwrap_or_default();
+            let parsed = entry.details.as_deref().and_then(parse_fetch_log_details);
+            let parsed = match parsed {
+                Some(parsed) => parsed,
+                None => {
+                    return Some(FetchHistoryRowView {
+                        timestamp: entry.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                        status_label: "Nieznany".to_string(),
+                        status_key: "failed".to_string(),
+                        status_class: "error".to_string(),
+                        inserted: None,
+                        updated: None,
+                        error_count: 0,
+                        summary: "Nie udało się odczytać szczegółów tego pobrania.".to_string(),
+                        errors: vec![],
+                        missing_error_details: false,
+                        message: if raw_details.is_empty() {
+                            None
+                        } else {
+                            Some(raw_details)
+                        },
+                    });
+                }
+            };
 
             let has_errors = parsed.error_count > 0;
             let (status_label, status_class) = match parsed.status {
-                FetchLogStatus::Done if has_errors => ("Zakonczone z bledami", "error"),
-                FetchLogStatus::Done => ("Zakonczone", "success"),
+                FetchLogStatus::Done if has_errors => ("Zakończone z błędami", "error"),
+                FetchLogStatus::Done => ("Zakończone", "success"),
                 FetchLogStatus::Failed => ("Niepowodzenie", "error"),
             };
 
@@ -289,7 +333,7 @@ pub async fn fetch_history(
                         format!("Pobrano: {inserted} nowych, {updated} zaktualizowanych.")
                     } else {
                         format!(
-                            "Pobrano: {inserted} nowych, {updated} zaktualizowanych. Bledy: {}.",
+                            "Pobrano: {inserted} nowych, {updated} zaktualizowanych. Błędy: {}.",
                             parsed.error_count
                         )
                     }
@@ -297,28 +341,31 @@ pub async fn fetch_history(
                 FetchLogStatus::Failed => parsed
                     .message
                     .clone()
-                    .unwrap_or_else(|| "Pobieranie nie powiodlo sie".to_string()),
+                    .unwrap_or_else(|| "Pobieranie nie powiodło się".to_string()),
             };
+            let missing_error_details = has_errors && parsed.errors.is_empty();
 
             Some(FetchHistoryRowView {
                 timestamp: entry.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
                 status_label: status_label.to_string(),
+                status_key: match parsed.status {
+                    FetchLogStatus::Done => "done".to_string(),
+                    FetchLogStatus::Failed => "failed".to_string(),
+                },
                 status_class: status_class.to_string(),
                 inserted: parsed.inserted,
                 updated: parsed.updated,
                 error_count: parsed.error_count as usize,
                 summary,
                 errors: parsed.errors,
+                missing_error_details,
                 message: parsed.message,
             })
         })
         .collect();
 
     if status_filter != "all" {
-        rows.retain(|row| {
-            (status_filter == "done" && row.status_class == "success")
-                || (status_filter == "failed" && row.status_class == "error")
-        });
+        rows.retain(|row| row.status_key == status_filter);
     }
     if !q_lower.is_empty() {
         rows.retain(|row| {
@@ -494,6 +541,7 @@ pub async fn fetch_execute(
                             status: "done",
                             inserted: result.inserted,
                             updated: result.updated,
+                            error_count: error_msgs.len() as u32,
                             errors: error_msgs.clone(),
                         })
                         .ok(),
@@ -618,4 +666,45 @@ fn render_form_error(
         default_date_to: today,
         csrf_token,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FetchLogStatus, parse_fetch_log_details};
+
+    #[test]
+    fn parse_done_json_with_error_list() {
+        let details = r#"{"status":"done","inserted":2,"updated":1,"errors":["A","B"]}"#;
+        let parsed = parse_fetch_log_details(details).expect("parsed");
+
+        assert_eq!(parsed.status, FetchLogStatus::Done);
+        assert_eq!(parsed.inserted, Some(2));
+        assert_eq!(parsed.updated, Some(1));
+        assert_eq!(parsed.error_count, 2);
+        assert_eq!(parsed.errors.len(), 2);
+    }
+
+    #[test]
+    fn parse_done_json_with_error_count_only() {
+        let details = r#"{"status":"done","inserted":0,"updated":0,"errors":86}"#;
+        let parsed = parse_fetch_log_details(details).expect("parsed");
+
+        assert_eq!(parsed.status, FetchLogStatus::Done);
+        assert_eq!(parsed.inserted, Some(0));
+        assert_eq!(parsed.updated, Some(0));
+        assert_eq!(parsed.error_count, 86);
+        assert!(parsed.errors.is_empty());
+    }
+
+    #[test]
+    fn parse_legacy_details_with_error_count() {
+        let details = "inserted=43,updated=18,errors=2";
+        let parsed = parse_fetch_log_details(details).expect("parsed");
+
+        assert_eq!(parsed.status, FetchLogStatus::Done);
+        assert_eq!(parsed.inserted, Some(43));
+        assert_eq!(parsed.updated, Some(18));
+        assert_eq!(parsed.error_count, 2);
+        assert!(parsed.errors.is_empty());
+    }
 }
