@@ -2,9 +2,11 @@
 
 Polish e-invoice (KSeF) integration in Rust. Send, receive, and manage VAT invoices through the national KSeF API v2.0.
 
+> **Unofficial project.** Not affiliated with or endorsed by the Ministry of Finance of Poland. Use at your own risk.
+
 ## What is KSeF
 
-KSeF (Krajowy System e-Faktur) is Poland's mandatory e-invoicing system run by the Ministry of Finance. Starting 2026, every company in Poland must submit VAT invoices as signed and encrypted FA(3) XML through the KSeF API.
+KSeF (Krajowy System e-Faktur) is Poland's mandatory e-invoicing system run by the Ministry of Finance. The rollout is phased: large taxpayers from **1 February 2026**, remaining companies from **1 April 2026**, and previously exempt smallest entities from **1 January 2027**. All must submit VAT invoices as signed and encrypted FA(3) XML through the KSeF API.
 
 KsefPay is a **standalone server** for micro and solo businesses that don't have an ERP and don't want to pay for invoicing SaaS. Fill out a form, the app generates FA(3) XML, encrypts it (AES-256-CBC + RSA-OAEP), signs the session (XAdES-BES), submits to KSeF, and tracks the status.
 
