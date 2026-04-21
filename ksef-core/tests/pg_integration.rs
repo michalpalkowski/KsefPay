@@ -159,6 +159,14 @@ fn test_account_id() -> NipAccountId {
     NipAccountId::from_uuid(Uuid::from_u128(1))
 }
 
+fn account_id_a() -> NipAccountId {
+    NipAccountId::from_uuid(Uuid::from_u128(11))
+}
+
+fn account_id_b() -> NipAccountId {
+    NipAccountId::from_uuid(Uuid::from_u128(22))
+}
+
 async fn create_account_with_id(repo: &Db, id: NipAccountId, nip: Nip) {
     let mut account = make_nip_account(&nip);
     account.id = id;
@@ -300,7 +308,7 @@ async fn invoice_update_status_changes_status() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    repo.update_status(&id, InvoiceStatus::Queued)
+    repo.update_status(&id, &test_account_id(), InvoiceStatus::Queued)
         .await
         .unwrap();
 
@@ -314,9 +322,10 @@ async fn invoice_update_status_changes_status() {
 async fn invoice_update_status_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    let dummy_account = NipAccountId::new();
 
     let err = repo
-        .update_status(&InvoiceId::new(), InvoiceStatus::Queued)
+        .update_status(&InvoiceId::new(), &dummy_account, InvoiceStatus::Queued)
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -331,7 +340,9 @@ async fn invoice_set_ksef_number_persists() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    repo.set_ksef_number(&id, "KSeF-12345").await.unwrap();
+    repo.set_ksef_number(&id, &test_account_id(), "KSeF-12345")
+        .await
+        .unwrap();
 
     let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
         .await
@@ -348,7 +359,7 @@ async fn invoice_set_ksef_error_persists() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    repo.set_ksef_error(&id, "submission timed out")
+    repo.set_ksef_error(&id, &test_account_id(), "submission timed out")
         .await
         .unwrap();
 
@@ -362,9 +373,10 @@ async fn invoice_set_ksef_error_persists() {
 async fn invoice_set_ksef_number_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    let dummy_account = NipAccountId::new();
 
     let err = repo
-        .set_ksef_number(&InvoiceId::new(), "KSeF-999")
+        .set_ksef_number(&InvoiceId::new(), &dummy_account, "KSeF-999")
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -374,9 +386,10 @@ async fn invoice_set_ksef_number_not_found() {
 async fn invoice_set_ksef_error_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
+    let dummy_account = NipAccountId::new();
 
     let err = repo
-        .set_ksef_error(&InvoiceId::new(), "oops")
+        .set_ksef_error(&InvoiceId::new(), &dummy_account, "oops")
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -1188,4 +1201,117 @@ async fn access_isolation_between_users() {
             .is_some()
     );
     assert!(db.has_access(&bob_id, &test_nip()).await.unwrap().is_none());
+}
+
+// ===========================================================================
+// Cross-tenant isolation: mutations must not touch a different account's data
+// ===========================================================================
+
+/// `update_status` with a wrong `account_id` must return NotFound and must not
+/// modify the invoice that belongs to the correct account.
+#[tokio::test]
+async fn update_status_wrong_account_returns_not_found() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a).await;
+    create_account_with_id(&repo, account_id_b(), nip_b).await;
+
+    let mut inv = sample_invoice();
+    inv.nip_account_id = account_id_a();
+    let id = repo.save(&inv).await.unwrap();
+
+    // Try to update with account B's ID — must fail
+    let err = repo
+        .update_status(&id, &account_id_b(), InvoiceStatus::Queued)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::NotFound { .. }));
+
+    // Invoice A is unchanged
+    let found = InvoiceRepository::find_by_id(&repo, &id, &account_id_a())
+        .await
+        .unwrap();
+    assert_eq!(found.status, InvoiceStatus::Draft);
+}
+
+/// `set_ksef_number` with a wrong `account_id` must return NotFound and must not
+/// write the ksef_number on the invoice belonging to the correct account.
+#[tokio::test]
+async fn set_ksef_number_wrong_account_returns_not_found() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a).await;
+    create_account_with_id(&repo, account_id_b(), nip_b).await;
+
+    let mut inv = sample_invoice();
+    inv.nip_account_id = account_id_a();
+    let id = repo.save(&inv).await.unwrap();
+
+    let err = repo
+        .set_ksef_number(&id, &account_id_b(), "KSeF-EVIL-001")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::NotFound { .. }));
+
+    // ksef_number on account A's invoice is still None
+    let found = InvoiceRepository::find_by_id(&repo, &id, &account_id_a())
+        .await
+        .unwrap();
+    assert!(found.ksef_number.is_none());
+}
+
+/// `set_ksef_error` with a wrong `account_id` must return NotFound and must not
+/// write the error on the invoice belonging to the correct account.
+#[tokio::test]
+async fn set_ksef_error_wrong_account_returns_not_found() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a).await;
+    create_account_with_id(&repo, account_id_b(), nip_b).await;
+
+    let mut inv = sample_invoice();
+    inv.nip_account_id = account_id_a();
+    let id = repo.save(&inv).await.unwrap();
+
+    let err = repo
+        .set_ksef_error(&id, &account_id_b(), "injected error")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::NotFound { .. }));
+
+    let found = InvoiceRepository::find_by_id(&repo, &id, &account_id_a())
+        .await
+        .unwrap();
+    assert!(found.ksef_error.is_none());
+}
+
+/// `find_by_id` with a wrong `account_id` must return NotFound even when the
+/// invoice exists in a different account.
+#[tokio::test]
+async fn find_by_id_wrong_account_returns_not_found() {
+    let pool = isolated_pool().await;
+    let repo = Db::new(pool);
+
+    let nip_a = Nip::parse("5260250274").unwrap();
+    let nip_b = Nip::parse("1060000062").unwrap();
+    create_account_with_id(&repo, account_id_a(), nip_a).await;
+    create_account_with_id(&repo, account_id_b(), nip_b).await;
+
+    let mut inv = sample_invoice();
+    inv.nip_account_id = account_id_a();
+    let id = repo.save(&inv).await.unwrap();
+
+    let err = InvoiceRepository::find_by_id(&repo, &id, &account_id_b())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
