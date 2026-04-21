@@ -150,12 +150,12 @@ impl InvoiceService {
             // ACID: both operations in one transaction
             let tx = atomic.begin().await?;
             tx.find_by_id(id, account_id).await?;
-            tx.update_status(id, new_status).await?;
+            tx.update_status(id, account_id, new_status).await?;
             tx.enqueue(job).await?;
             tx.commit().await?;
         } else {
             // Non-transactional fallback (unit tests with mocks)
-            self.repo.update_status(id, new_status).await?;
+            self.repo.update_status(id, account_id, new_status).await?;
             self.queue.enqueue(job).await?;
         }
 
@@ -174,7 +174,7 @@ impl InvoiceService {
             return Ok(());
         }
         let new_status = invoice.status.transition_to(InvoiceStatus::Submitted)?;
-        self.repo.update_status(id, new_status).await?;
+        self.repo.update_status(id, account_id, new_status).await?;
         Ok(())
     }
 
@@ -189,16 +189,16 @@ impl InvoiceService {
             let tx = atomic.begin().await?;
             let invoice = tx.find_by_id(id, account_id).await?;
             let new_status = invoice.status.transition_to(InvoiceStatus::Accepted)?;
-            tx.update_status(id, new_status).await?;
-            tx.set_ksef_number(id, ksef_number).await?;
+            tx.update_status(id, account_id, new_status).await?;
+            tx.set_ksef_number(id, account_id, ksef_number).await?;
             tx.commit().await?;
             return Ok(());
         }
 
         let invoice = self.repo.find_by_id(id, account_id).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Accepted)?;
-        self.repo.update_status(id, new_status).await?;
-        self.repo.set_ksef_number(id, ksef_number).await?;
+        self.repo.update_status(id, account_id, new_status).await?;
+        self.repo.set_ksef_number(id, account_id, ksef_number).await?;
         Ok(())
     }
 
@@ -213,16 +213,16 @@ impl InvoiceService {
             let tx = atomic.begin().await?;
             let invoice = tx.find_by_id(id, account_id).await?;
             let new_status = invoice.status.transition_to(InvoiceStatus::Rejected)?;
-            tx.update_status(id, new_status).await?;
-            tx.set_ksef_error(id, error).await?;
+            tx.update_status(id, account_id, new_status).await?;
+            tx.set_ksef_error(id, account_id, error).await?;
             tx.commit().await?;
             return Ok(());
         }
 
         let invoice = self.repo.find_by_id(id, account_id).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Rejected)?;
-        self.repo.update_status(id, new_status).await?;
-        self.repo.set_ksef_error(id, error).await?;
+        self.repo.update_status(id, account_id, new_status).await?;
+        self.repo.set_ksef_error(id, account_id, error).await?;
         Ok(())
     }
 
@@ -237,16 +237,16 @@ impl InvoiceService {
             let tx = atomic.begin().await?;
             let invoice = tx.find_by_id(id, account_id).await?;
             let new_status = invoice.status.transition_to(InvoiceStatus::Failed)?;
-            tx.update_status(id, new_status).await?;
-            tx.set_ksef_error(id, error).await?;
+            tx.update_status(id, account_id, new_status).await?;
+            tx.set_ksef_error(id, account_id, error).await?;
             tx.commit().await?;
             return Ok(());
         }
 
         let invoice = self.repo.find_by_id(id, account_id).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Failed)?;
-        self.repo.update_status(id, new_status).await?;
-        self.repo.set_ksef_error(id, error).await?;
+        self.repo.update_status(id, account_id, new_status).await?;
+        self.repo.set_ksef_error(id, account_id, error).await?;
         Ok(())
     }
 

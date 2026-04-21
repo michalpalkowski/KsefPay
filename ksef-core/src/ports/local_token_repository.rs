@@ -24,6 +24,10 @@ pub trait LocalTokenRepository: Send + Sync {
         user_id: &UserId,
     ) -> Result<Vec<LocalToken>, RepositoryError>;
 
-    /// Mark a token as revoked by its KSeF token ID.
-    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError>;
+    /// Mark a token as revoked by its KSeF token ID, scoped to the given account.
+    async fn mark_revoked(
+        &self,
+        ksef_token_id: &str,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError>;
 }

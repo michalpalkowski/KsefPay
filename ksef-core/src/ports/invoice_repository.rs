@@ -59,17 +59,32 @@ pub trait InvoiceRepository: Send + Sync {
     async fn update_status(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError>;
 
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         ksef_number: &str,
     ) -> Result<(), RepositoryError>;
 
-    async fn set_ksef_error(&self, id: &InvoiceId, error: &str) -> Result<(), RepositoryError>;
+    async fn set_ksef_error(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+        error: &str,
+    ) -> Result<(), RepositoryError>;
 
+    /// Find an invoice by its KSeF-assigned number across all accounts.
+    ///
+    /// # Warning
+    ///
+    /// This method does **not** filter by account and may return invoices from any tenant.
+    /// Prefer [`InvoiceRepository::find_by_ksef_number_and_account`] in all production code.
+    /// This variant is retained only for internal background-job contexts that operate
+    /// before the account is fully resolved.
     async fn find_by_ksef_number(
         &self,
         ksef_number: &KSeFNumber,

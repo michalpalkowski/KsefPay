@@ -263,7 +263,11 @@ pub async fn revoke(
             )
             .await;
 
-            if let Err(e) = state.local_token_repo.mark_revoked(&token_id).await {
+            if let Err(e) = state
+                .local_token_repo
+                .mark_revoked(&token_id, &nip_ctx.account.id)
+                .await
+            {
                 tracing::warn!(token_id = %token_id, "failed to mark local token revoked: {e}");
             }
 

@@ -69,12 +69,13 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn update_status(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let invoice = store
             .iter_mut()
-            .find(|i| i.id.as_uuid() == id.as_uuid())
+            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
                 id: id.to_string(),
@@ -86,12 +87,13 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         ksef_number: &str,
     ) -> Result<(), RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let invoice = store
             .iter_mut()
-            .find(|i| i.id.as_uuid() == id.as_uuid())
+            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
                 id: id.to_string(),
@@ -102,11 +104,16 @@ impl InvoiceRepository for MockInvoiceRepo {
         Ok(())
     }
 
-    async fn set_ksef_error(&self, id: &InvoiceId, error: &str) -> Result<(), RepositoryError> {
+    async fn set_ksef_error(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+        error: &str,
+    ) -> Result<(), RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let invoice = store
             .iter_mut()
-            .find(|i| i.id.as_uuid() == id.as_uuid())
+            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
                 id: id.to_string(),
@@ -259,7 +266,7 @@ mod tests {
         let invoice = sample_invoice();
         let id = repo.save(&invoice).await.unwrap();
 
-        repo.update_status(&id, InvoiceStatus::Queued)
+        repo.update_status(&id, &invoice.nip_account_id, InvoiceStatus::Queued)
             .await
             .unwrap();
 
@@ -271,8 +278,9 @@ mod tests {
     #[tokio::test]
     async fn update_status_not_found() {
         let repo = MockInvoiceRepo::new();
+        let dummy_account = NipAccountId::new();
         let err = repo
-            .update_status(&InvoiceId::new(), InvoiceStatus::Queued)
+            .update_status(&InvoiceId::new(), &dummy_account, InvoiceStatus::Queued)
             .await
             .unwrap_err();
         assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -285,7 +293,9 @@ mod tests {
         let invoice = sample_invoice();
         let id = repo.save(&invoice).await.unwrap();
 
-        repo.set_ksef_number(&id, "KSeF-12345").await.unwrap();
+        repo.set_ksef_number(&id, &invoice.nip_account_id, "KSeF-12345")
+            .await
+            .unwrap();
 
         let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
         assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-12345");

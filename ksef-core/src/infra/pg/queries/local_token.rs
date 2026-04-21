@@ -99,11 +99,13 @@ pub async fn list_by_account_for_user<'e>(
 pub async fn mark_revoked<'e>(
     exec: impl PgExecutor<'e>,
     ksef_token_id: &str,
+    account_id: &NipAccountId,
 ) -> Result<(), RepositoryError> {
     sqlx::query(
-        "UPDATE nip_account_tokens SET revoked_at = COALESCE(revoked_at, NOW()) WHERE ksef_token_id = $1",
+        "UPDATE nip_account_tokens SET revoked_at = COALESCE(revoked_at, NOW()) WHERE ksef_token_id = $1 AND nip_account_id = $2",
     )
     .bind(ksef_token_id)
+    .bind(account_id.as_uuid())
     .execute(exec)
     .await
     .map_err(RepositoryError::Database)?;

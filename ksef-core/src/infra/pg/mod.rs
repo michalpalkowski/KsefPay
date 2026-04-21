@@ -126,19 +126,26 @@ impl InvoiceRepository for Db {
     async fn update_status(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError> {
-        queries::invoice::update_status(&self.pool, id, status).await
+        queries::invoice::update_status(&self.pool, id, account_id, status).await
     }
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         ksef_number: &str,
     ) -> Result<(), RepositoryError> {
-        queries::invoice::set_ksef_number(&self.pool, id, ksef_number).await
+        queries::invoice::set_ksef_number(&self.pool, id, account_id, ksef_number).await
     }
-    async fn set_ksef_error(&self, id: &InvoiceId, error: &str) -> Result<(), RepositoryError> {
-        queries::invoice::set_ksef_error(&self.pool, id, error).await
+    async fn set_ksef_error(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+        error: &str,
+    ) -> Result<(), RepositoryError> {
+        queries::invoice::set_ksef_error(&self.pool, id, account_id, error).await
     }
     async fn find_by_ksef_number(
         &self,
@@ -335,8 +342,12 @@ impl LocalTokenRepository for Db {
         queries::local_token::list_by_account_for_user(&self.pool, account_id, user_id).await
     }
 
-    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError> {
-        queries::local_token::mark_revoked(&self.pool, ksef_token_id).await
+    async fn mark_revoked(
+        &self,
+        ksef_token_id: &str,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError> {
+        queries::local_token::mark_revoked(&self.pool, ksef_token_id, account_id).await
     }
 }
 
@@ -392,25 +403,32 @@ impl InvoiceRepository for Tx {
     async fn update_status(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::update_status(&mut **tx, id, status).await
+        queries::invoice::update_status(&mut **tx, id, account_id, status).await
     }
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
+        account_id: &NipAccountId,
         ksef_number: &str,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::set_ksef_number(&mut **tx, id, ksef_number).await
+        queries::invoice::set_ksef_number(&mut **tx, id, account_id, ksef_number).await
     }
-    async fn set_ksef_error(&self, id: &InvoiceId, error: &str) -> Result<(), RepositoryError> {
+    async fn set_ksef_error(
+        &self,
+        id: &InvoiceId,
+        account_id: &NipAccountId,
+        error: &str,
+    ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::set_ksef_error(&mut **tx, id, error).await
+        queries::invoice::set_ksef_error(&mut **tx, id, account_id, error).await
     }
     async fn find_by_ksef_number(
         &self,
@@ -647,10 +665,14 @@ impl LocalTokenRepository for Tx {
         queries::local_token::list_by_account_for_user(&mut **tx, account_id, user_id).await
     }
 
-    async fn mark_revoked(&self, ksef_token_id: &str) -> Result<(), RepositoryError> {
+    async fn mark_revoked(
+        &self,
+        ksef_token_id: &str,
+        account_id: &NipAccountId,
+    ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::local_token::mark_revoked(&mut **tx, ksef_token_id).await
+        queries::local_token::mark_revoked(&mut **tx, ksef_token_id, account_id).await
     }
 }
 

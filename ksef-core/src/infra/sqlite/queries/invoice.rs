@@ -262,13 +262,15 @@ pub async fn find_by_id<'e>(
 pub async fn update_status<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
     status: InvoiceStatus,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
-        "UPDATE invoices SET status = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2",
+        "UPDATE invoices SET status = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2 AND nip_account_id = ?3",
     )
     .bind(status.to_string())
     .bind(id.to_string())
+    .bind(account_id.as_uuid().to_string())
     .execute(exec)
     .await?;
 
@@ -284,13 +286,15 @@ pub async fn update_status<'e>(
 pub async fn set_ksef_number<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
     ksef_number: &str,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
-        "UPDATE invoices SET ksef_number = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2",
+        "UPDATE invoices SET ksef_number = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2 AND nip_account_id = ?3",
     )
     .bind(ksef_number)
     .bind(id.to_string())
+    .bind(account_id.as_uuid().to_string())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {
@@ -305,13 +309,15 @@ pub async fn set_ksef_number<'e>(
 pub async fn set_ksef_error<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
     error: &str,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
-        "UPDATE invoices SET ksef_error = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2",
+        "UPDATE invoices SET ksef_error = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2 AND nip_account_id = ?3",
     )
     .bind(error)
     .bind(id.to_string())
+    .bind(account_id.as_uuid().to_string())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {

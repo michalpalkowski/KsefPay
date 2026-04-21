@@ -233,13 +233,17 @@ pub async fn find_by_id<'e>(
 pub async fn update_status<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
     status: InvoiceStatus,
 ) -> Result<(), RepositoryError> {
-    let result = sqlx::query("UPDATE invoices SET status = $1, updated_at = NOW() WHERE id = $2")
-        .bind(status.to_string())
-        .bind(id.as_uuid())
-        .execute(exec)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE invoices SET status = $1, updated_at = NOW() WHERE id = $2 AND nip_account_id = $3",
+    )
+    .bind(status.to_string())
+    .bind(id.as_uuid())
+    .bind(account_id.as_uuid())
+    .execute(exec)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(RepositoryError::NotFound {
             entity: "Invoice",
@@ -252,14 +256,17 @@ pub async fn update_status<'e>(
 pub async fn set_ksef_number<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
     ksef_number: &str,
 ) -> Result<(), RepositoryError> {
-    let result =
-        sqlx::query("UPDATE invoices SET ksef_number = $1, updated_at = NOW() WHERE id = $2")
-            .bind(ksef_number)
-            .bind(id.as_uuid())
-            .execute(exec)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE invoices SET ksef_number = $1, updated_at = NOW() WHERE id = $2 AND nip_account_id = $3",
+    )
+    .bind(ksef_number)
+    .bind(id.as_uuid())
+    .bind(account_id.as_uuid())
+    .execute(exec)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(RepositoryError::NotFound {
             entity: "Invoice",
@@ -272,14 +279,17 @@ pub async fn set_ksef_number<'e>(
 pub async fn set_ksef_error<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
+    account_id: &NipAccountId,
     error: &str,
 ) -> Result<(), RepositoryError> {
-    let result =
-        sqlx::query("UPDATE invoices SET ksef_error = $1, updated_at = NOW() WHERE id = $2")
-            .bind(error)
-            .bind(id.as_uuid())
-            .execute(exec)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE invoices SET ksef_error = $1, updated_at = NOW() WHERE id = $2 AND nip_account_id = $3",
+    )
+    .bind(error)
+    .bind(id.as_uuid())
+    .bind(account_id.as_uuid())
+    .execute(exec)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(RepositoryError::NotFound {
             entity: "Invoice",
