@@ -99,6 +99,9 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!("../../../migrations/014_invite_integrity.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -307,6 +310,26 @@ impl ApplicationAccessRepository for Db {
         queries::application_access::find_invite_by_token_hash(&self.pool, token_hash).await
     }
 
+    async fn activate_application_access(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError> {
+        let tx = self.tx().await?;
+        let summary = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            let summary =
+                queries::workspace::ensure_default_workspace_in_tx(inner, user_id, user_email)
+                    .await?;
+            queries::application_access::accept_invite(&mut **inner, invite_id).await?;
+            summary
+        };
+        tx.commit().await?;
+        Ok(summary)
+    }
+
     async fn accept_invite(
         &self,
         invite_id: &ApplicationAccessInviteId,
@@ -329,7 +352,14 @@ impl WorkspaceRepository for Db {
         workspace: &Workspace,
         owner_id: &UserId,
     ) -> Result<WorkspaceId, RepositoryError> {
-        queries::workspace::create_workspace(&self.pool, workspace, owner_id).await
+        let tx = self.tx().await?;
+        let workspace_id = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            queries::workspace::create_workspace_in_tx(inner, workspace, owner_id).await?
+        };
+        tx.commit().await?;
+        Ok(workspace_id)
     }
 
     async fn ensure_default_workspace(
@@ -337,7 +367,14 @@ impl WorkspaceRepository for Db {
         user_id: &UserId,
         user_email: &str,
     ) -> Result<WorkspaceSummary, RepositoryError> {
-        queries::workspace::ensure_default_workspace(&self.pool, user_id, user_email).await
+        let tx = self.tx().await?;
+        let summary = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            queries::workspace::ensure_default_workspace_in_tx(inner, user_id, user_email).await?
+        };
+        tx.commit().await?;
+        Ok(summary)
     }
 
     async fn find_by_id(&self, workspace_id: &WorkspaceId) -> Result<Workspace, RepositoryError> {
@@ -428,6 +465,22 @@ impl WorkspaceRepository for Db {
         token_hash: &str,
     ) -> Result<Option<WorkspaceInvite>, RepositoryError> {
         queries::workspace::find_invite_by_token_hash(&self.pool, token_hash).await
+    }
+
+    async fn activate_invite_membership(
+        &self,
+        invite: &WorkspaceInvite,
+        user_id: &UserId,
+    ) -> Result<(), RepositoryError> {
+        let tx = self.tx().await?;
+        {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            queries::workspace::add_member(&mut **inner, &invite.workspace_id, user_id, invite.role)
+                .await?;
+            queries::workspace::accept_invite(&mut **inner, &invite.id).await?;
+        }
+        tx.commit().await
     }
 
     async fn accept_invite(&self, invite_id: &WorkspaceInviteId) -> Result<(), RepositoryError> {

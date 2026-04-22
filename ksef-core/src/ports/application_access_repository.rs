@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
 use crate::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
+use crate::domain::user::UserId;
+use crate::domain::workspace::WorkspaceSummary;
 use crate::error::RepositoryError;
 
 #[async_trait]
@@ -16,6 +18,13 @@ pub trait ApplicationAccessRepository: Send + Sync {
         &self,
         token_hash: &str,
     ) -> Result<Option<ApplicationAccessInvite>, RepositoryError>;
+
+    async fn activate_application_access(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError>;
 
     async fn accept_invite(
         &self,

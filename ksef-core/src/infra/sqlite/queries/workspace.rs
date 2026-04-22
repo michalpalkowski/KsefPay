@@ -1,5 +1,5 @@
 use chrono::Utc;
-use sqlx::SqliteExecutor;
+use sqlx::{Sqlite, SqliteExecutor, Transaction};
 
 use super::datetime::parse_sqlite_datetime;
 use super::nip_account::NipAccountRow;
@@ -237,23 +237,12 @@ fn personal_workspace_name(user_email: &str) -> String {
     }
 }
 
-fn merge_role(existing: WorkspaceRole, desired: WorkspaceRole) -> WorkspaceRole {
-    use WorkspaceRole::{Admin, Operator, Owner, ReadOnly};
-
-    match (existing, desired) {
-        (Owner, _) | (_, Owner) => Owner,
-        (Admin, _) | (_, Admin) => Admin,
-        (Operator, _) | (_, Operator) => Operator,
-        _ => ReadOnly,
-    }
-}
-
 async fn first_workspace_for_user<'e, E>(
     exec: E,
     user_id: &UserId,
 ) -> Result<Option<WorkspaceSummary>, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let row: Option<WorkspaceSummaryRow> = sqlx::query_as(
         r"SELECT
@@ -284,36 +273,6 @@ where
     row.map(WorkspaceSummaryRow::into_domain).transpose()
 }
 
-async fn ensure_workspace_for_user<'e, E>(
-    exec: E,
-    user_id: &UserId,
-    user_email: &str,
-) -> Result<WorkspaceSummary, RepositoryError>
-where
-    E: SqliteExecutor<'e> + Copy,
-{
-    if let Some(summary) = first_workspace_for_user(exec, user_id).await? {
-        return Ok(summary);
-    }
-
-    let now = Utc::now();
-    let workspace = Workspace {
-        id: WorkspaceId::new(),
-        slug: slugify_personal_workspace(user_email, user_id),
-        display_name: personal_workspace_name(user_email),
-        created_by_user_id: user_id.clone(),
-        created_at: now,
-        updated_at: now,
-    };
-    create_workspace(exec, &workspace, user_id).await?;
-    first_workspace_for_user(exec, user_id)
-        .await?
-        .ok_or_else(|| RepositoryError::NotFound {
-            entity: "Workspace",
-            id: workspace.id.to_string(),
-        })
-}
-
 async fn upsert_membership<'e, E>(
     exec: E,
     workspace_id: &WorkspaceId,
@@ -321,13 +280,9 @@ async fn upsert_membership<'e, E>(
     role: WorkspaceRole,
 ) -> Result<(), RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let now = Utc::now().to_rfc3339();
-    let existing = find_membership(exec, workspace_id, user_id).await?;
-    let role = existing
-        .map(|membership| merge_role(membership.role, role))
-        .unwrap_or(role);
 
     sqlx::query(
         r"INSERT INTO workspace_memberships (
@@ -357,14 +312,11 @@ where
     Ok(())
 }
 
-pub async fn create_workspace<'e, E>(
-    exec: E,
+pub async fn create_workspace_in_tx(
+    exec: &mut Transaction<'_, Sqlite>,
     workspace: &Workspace,
     owner_id: &UserId,
-) -> Result<WorkspaceId, RepositoryError>
-where
-    E: SqliteExecutor<'e> + Copy,
-{
+) -> Result<WorkspaceId, RepositoryError> {
     sqlx::query(
         r"INSERT INTO workspaces (id, slug, display_name, created_by_user_id, created_at, updated_at)
           VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -375,7 +327,7 @@ where
     .bind(workspace.created_by_user_id.to_string())
     .bind(workspace.created_at.to_rfc3339())
     .bind(workspace.updated_at.to_rfc3339())
-    .execute(exec)
+    .execute(&mut **exec)
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
@@ -387,19 +339,36 @@ where
         _ => RepositoryError::Database(e),
     })?;
 
-    upsert_membership(exec, &workspace.id, owner_id, WorkspaceRole::Owner).await?;
+    upsert_membership(&mut **exec, &workspace.id, owner_id, WorkspaceRole::Owner).await?;
     Ok(workspace.id.clone())
 }
 
-pub async fn ensure_default_workspace<'e, E>(
-    exec: E,
+pub async fn ensure_default_workspace_in_tx(
+    exec: &mut Transaction<'_, Sqlite>,
     user_id: &UserId,
     user_email: &str,
-) -> Result<WorkspaceSummary, RepositoryError>
-where
-    E: SqliteExecutor<'e> + Copy,
-{
-    ensure_workspace_for_user(exec, user_id, user_email).await
+) -> Result<WorkspaceSummary, RepositoryError> {
+    if let Some(summary) = first_workspace_for_user(&mut **exec, user_id).await? {
+        return Ok(summary);
+    }
+
+    let now = Utc::now();
+    let workspace = Workspace {
+        id: WorkspaceId::new(),
+        slug: slugify_personal_workspace(user_email, user_id),
+        display_name: personal_workspace_name(user_email),
+        created_by_user_id: user_id.clone(),
+        created_at: now,
+        updated_at: now,
+    };
+
+    create_workspace_in_tx(exec, &workspace, user_id).await?;
+    first_workspace_for_user(&mut **exec, user_id)
+        .await?
+        .ok_or_else(|| RepositoryError::NotFound {
+            entity: "Workspace",
+            id: workspace.id.to_string(),
+        })
 }
 
 pub async fn find_by_id<'e, E>(
@@ -407,7 +376,7 @@ pub async fn find_by_id<'e, E>(
     workspace_id: &WorkspaceId,
 ) -> Result<Workspace, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let row: WorkspaceRow = sqlx::query_as("SELECT * FROM workspaces WHERE id = ?1")
         .bind(workspace_id.to_string())
@@ -426,7 +395,7 @@ pub async fn list_for_user<'e, E>(
     user_id: &UserId,
 ) -> Result<Vec<WorkspaceSummary>, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let rows: Vec<WorkspaceSummaryRow> = sqlx::query_as(
         r"SELECT
@@ -464,7 +433,7 @@ pub async fn find_membership<'e, E>(
     user_id: &UserId,
 ) -> Result<Option<WorkspaceMembership>, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let row: Option<WorkspaceMembershipRow> = sqlx::query_as(
         r"SELECT * FROM workspace_memberships
@@ -485,7 +454,7 @@ pub async fn add_member<'e, E>(
     role: WorkspaceRole,
 ) -> Result<(), RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     upsert_membership(exec, workspace_id, user_id, role).await
 }
@@ -498,7 +467,7 @@ pub async fn attach_nip<'e, E>(
     attached_by: &UserId,
 ) -> Result<(), RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     sqlx::query(
         r"INSERT INTO workspace_nip_accounts (
@@ -534,7 +503,7 @@ pub async fn list_nip_accounts_for_user<'e, E>(
     certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Vec<NipAccount>, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let rows: Vec<NipAccountRow> = sqlx::query_as(
         r"SELECT DISTINCT na.*
@@ -595,7 +564,7 @@ pub async fn create_invite<'e, E>(
     invite: &WorkspaceInvite,
 ) -> Result<WorkspaceInviteId, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     sqlx::query(
         r"INSERT INTO workspace_invites (
@@ -633,13 +602,14 @@ pub async fn list_pending_invites<'e, E>(
     workspace_id: &WorkspaceId,
 ) -> Result<Vec<WorkspaceInvite>, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let rows: Vec<WorkspaceInviteRow> = sqlx::query_as(
         r"SELECT * FROM workspace_invites
           WHERE workspace_id = ?1
             AND accepted_at IS NULL
             AND revoked_at IS NULL
+            AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
           ORDER BY created_at DESC",
     )
     .bind(workspace_id.to_string())
@@ -656,7 +626,7 @@ pub async fn find_invite_by_token_hash<'e, E>(
     token_hash: &str,
 ) -> Result<Option<WorkspaceInvite>, RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
     let row: Option<WorkspaceInviteRow> =
         sqlx::query_as("SELECT * FROM workspace_invites WHERE token_hash = ?1")
@@ -672,14 +642,26 @@ pub async fn accept_invite<'e, E>(
     invite_id: &WorkspaceInviteId,
 ) -> Result<(), RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
-    sqlx::query(
-        "UPDATE workspace_invites SET accepted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND accepted_at IS NULL",
+    let result = sqlx::query(
+        "UPDATE workspace_invites
+            SET accepted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL",
     )
     .bind(invite_id.to_string())
     .execute(exec)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(RepositoryError::NotFound {
+            entity: "WorkspaceInvite",
+            id: invite_id.to_string(),
+        });
+    }
+
     Ok(())
 }
 
@@ -688,13 +670,25 @@ pub async fn revoke_invite<'e, E>(
     invite_id: &WorkspaceInviteId,
 ) -> Result<(), RepositoryError>
 where
-    E: SqliteExecutor<'e> + Copy,
+    E: SqliteExecutor<'e>,
 {
-    sqlx::query(
-        "UPDATE workspace_invites SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND revoked_at IS NULL",
+    let result = sqlx::query(
+        "UPDATE workspace_invites
+            SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL",
     )
     .bind(invite_id.to_string())
     .execute(exec)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(RepositoryError::NotFound {
+            entity: "WorkspaceInvite",
+            id: invite_id.to_string(),
+        });
+    }
+
     Ok(())
 }

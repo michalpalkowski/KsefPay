@@ -36,7 +36,7 @@ pub async fn create_invite<'e, E>(
     invite: &ApplicationAccessInvite,
 ) -> Result<ApplicationAccessInviteId, RepositoryError>
 where
-    E: PgExecutor<'e> + Copy,
+    E: PgExecutor<'e>,
 {
     sqlx::query(
         r"INSERT INTO application_access_invites (
@@ -71,12 +71,13 @@ pub async fn list_pending_invites<'e, E>(
     exec: E,
 ) -> Result<Vec<ApplicationAccessInvite>, RepositoryError>
 where
-    E: PgExecutor<'e> + Copy,
+    E: PgExecutor<'e>,
 {
     let rows: Vec<ApplicationAccessInviteRow> = sqlx::query_as(
         r"SELECT * FROM application_access_invites
           WHERE accepted_at IS NULL
             AND revoked_at IS NULL
+            AND expires_at > NOW()
           ORDER BY created_at DESC",
     )
     .fetch_all(exec)
@@ -92,7 +93,7 @@ pub async fn find_invite_by_token_hash<'e, E>(
     token_hash: &str,
 ) -> Result<Option<ApplicationAccessInvite>, RepositoryError>
 where
-    E: PgExecutor<'e> + Copy,
+    E: PgExecutor<'e>,
 {
     let row: Option<ApplicationAccessInviteRow> =
         sqlx::query_as("SELECT * FROM application_access_invites WHERE token_hash = $1")
@@ -108,14 +109,26 @@ pub async fn accept_invite<'e, E>(
     invite_id: &ApplicationAccessInviteId,
 ) -> Result<(), RepositoryError>
 where
-    E: PgExecutor<'e> + Copy,
+    E: PgExecutor<'e>,
 {
-    sqlx::query(
-        "UPDATE application_access_invites SET accepted_at = NOW() WHERE id = $1 AND accepted_at IS NULL",
+    let result = sqlx::query(
+        "UPDATE application_access_invites
+            SET accepted_at = NOW()
+          WHERE id = $1
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL",
     )
     .bind(invite_id.as_uuid())
     .execute(exec)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(RepositoryError::NotFound {
+            entity: "ApplicationAccessInvite",
+            id: invite_id.to_string(),
+        });
+    }
+
     Ok(())
 }
 
@@ -124,13 +137,25 @@ pub async fn revoke_invite<'e, E>(
     invite_id: &ApplicationAccessInviteId,
 ) -> Result<(), RepositoryError>
 where
-    E: PgExecutor<'e> + Copy,
+    E: PgExecutor<'e>,
 {
-    sqlx::query(
-        "UPDATE application_access_invites SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL",
+    let result = sqlx::query(
+        "UPDATE application_access_invites
+            SET revoked_at = NOW()
+          WHERE id = $1
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL",
     )
     .bind(invite_id.as_uuid())
     .execute(exec)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(RepositoryError::NotFound {
+            entity: "ApplicationAccessInvite",
+            id: invite_id.to_string(),
+        });
+    }
+
     Ok(())
 }

@@ -80,6 +80,12 @@ pub trait WorkspaceRepository: Send + Sync {
         token_hash: &str,
     ) -> Result<Option<WorkspaceInvite>, RepositoryError>;
 
+    async fn activate_invite_membership(
+        &self,
+        invite: &WorkspaceInvite,
+        user_id: &UserId,
+    ) -> Result<(), RepositoryError>;
+
     async fn accept_invite(&self, invite_id: &WorkspaceInviteId) -> Result<(), RepositoryError>;
 
     async fn revoke_invite(&self, invite_id: &WorkspaceInviteId) -> Result<(), RepositoryError>;

@@ -12,6 +12,7 @@ use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 use ksef_core::domain::account_scope::AccountScope;
+use ksef_core::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
 use ksef_core::domain::auth::{AccessToken, RefreshToken, TokenPair};
 use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::invoice::{
@@ -26,6 +27,7 @@ use ksef_core::domain::user::{User, UserId};
 use ksef_core::domain::workspace::{WorkspaceInvite, WorkspaceInviteId, WorkspaceRole};
 use ksef_core::error::RepositoryError;
 use ksef_core::infra::pg::{Db, run_migrations};
+use ksef_core::ports::application_access_repository::ApplicationAccessRepository;
 use ksef_core::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
 use ksef_core::ports::job_queue::JobQueue;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
@@ -1585,6 +1587,28 @@ async fn workspace_invite_lifecycle_is_persisted() {
         .unwrap();
     assert_eq!(loaded.email, invite.email);
 
+    let expired_invite = WorkspaceInvite {
+        id: WorkspaceInviteId::new(),
+        workspace_id: workspace.workspace.id.clone(),
+        email: "expired.member@example.com".to_string(),
+        role: WorkspaceRole::ReadOnly,
+        token_hash: "expired-workspace-invite".to_string(),
+        expires_at: Utc::now() - chrono::Duration::days(1),
+        accepted_at: None,
+        revoked_at: None,
+        created_by_user_id: owner_id.clone(),
+        created_at: Utc::now(),
+    };
+
+    WorkspaceRepository::create_invite(&db, &expired_invite)
+        .await
+        .unwrap();
+    let pending = WorkspaceRepository::list_pending_invites(&db, &workspace.workspace.id)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].email, invite.email);
+
     WorkspaceRepository::accept_invite(&db, &invite.id)
         .await
         .unwrap();
@@ -1594,18 +1618,114 @@ async fn workspace_invite_lifecycle_is_persisted() {
         .unwrap();
     assert!(accepted.accepted_at.is_some());
 
-    WorkspaceRepository::revoke_invite(&db, &invite.id)
+    let err = WorkspaceRepository::revoke_invite(&db, &invite.id)
         .await
-        .unwrap();
-    let revoked = WorkspaceRepository::find_invite_by_token_hash(&db, &invite.token_hash)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(revoked.revoked_at.is_some());
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::NotFound { .. }));
     assert!(
         WorkspaceRepository::list_pending_invites(&db, &workspace.workspace.id)
             .await
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn workspace_membership_reactivation_uses_requested_role() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool.clone());
+
+    let owner = make_user("owner@reactivation.pl");
+    let owner_id = UserRepository::create(&db, &owner).await.unwrap();
+    let member = make_user("member@reactivation.pl");
+    let member_id = UserRepository::create(&db, &member).await.unwrap();
+
+    let workspace = WorkspaceRepository::ensure_default_workspace(&db, &owner_id, &owner.email)
+        .await
+        .unwrap();
+
+    WorkspaceRepository::add_member(
+        &db,
+        &workspace.workspace.id,
+        &member_id,
+        WorkspaceRole::Admin,
+    )
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE workspace_memberships SET status = 'revoked' WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(workspace.workspace.id.as_uuid())
+    .bind(member_id.as_uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    WorkspaceRepository::add_member(
+        &db,
+        &workspace.workspace.id,
+        &member_id,
+        WorkspaceRole::ReadOnly,
+    )
+    .await
+    .unwrap();
+
+    let membership = WorkspaceRepository::find_membership(&db, &workspace.workspace.id, &member_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(membership.status, ksef_core::domain::workspace::WorkspaceMembershipStatus::Active);
+    assert_eq!(membership.role, WorkspaceRole::ReadOnly);
+}
+
+#[tokio::test]
+async fn application_access_invites_ignore_expired_and_block_double_terminal_state() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let admin = make_user("admin@app-access.pl");
+    let admin_id = UserRepository::create(&db, &admin).await.unwrap();
+
+    let pending = ApplicationAccessInvite {
+        id: ApplicationAccessInviteId::new(),
+        email: "pending@app-access.pl".to_string(),
+        token_hash: "pending-app-access".to_string(),
+        expires_at: Utc::now() + chrono::Duration::days(3),
+        accepted_at: None,
+        revoked_at: None,
+        created_by_user_id: admin_id.clone(),
+        created_at: Utc::now(),
+    };
+    let expired = ApplicationAccessInvite {
+        id: ApplicationAccessInviteId::new(),
+        email: "expired@app-access.pl".to_string(),
+        token_hash: "expired-app-access".to_string(),
+        expires_at: Utc::now() - chrono::Duration::days(1),
+        accepted_at: None,
+        revoked_at: None,
+        created_by_user_id: admin_id.clone(),
+        created_at: Utc::now(),
+    };
+
+    ApplicationAccessRepository::create_invite(&db, &pending)
+        .await
+        .unwrap();
+    ApplicationAccessRepository::create_invite(&db, &expired)
+        .await
+        .unwrap();
+
+    let pending_invites = ApplicationAccessRepository::list_pending_invites(&db)
+        .await
+        .unwrap();
+    assert_eq!(pending_invites.len(), 1);
+    assert_eq!(pending_invites[0].email, pending.email);
+
+    ApplicationAccessRepository::accept_invite(&db, &pending.id)
+        .await
+        .unwrap();
+    let err = ApplicationAccessRepository::revoke_invite(&db, &pending.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
