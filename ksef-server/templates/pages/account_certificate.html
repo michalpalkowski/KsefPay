@@ -1,0 +1,85 @@
+{% extends "layouts/app.html" %}
+{% import "macros/alerts.html" as alerts %}
+
+{% block head %}
+<title>Certyfikat KSeF - KSeF Pay</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <div>
+      <h1>Certyfikat KSeF</h1>
+      <p class="page-copy">{{ account.display_name }} • NIP {{ account.nip }}</p>
+    </div>
+  </div>
+
+  {% call alerts::alerts(error, success) %}{% endcall %}
+
+  <div class="card">
+    <h2>Aktualny stan</h2>
+    <dl>
+      <dt>Środowisko</dt>
+      <dd><code>{{ environment_name }}</code></dd>
+      <dt>Zapisana para PEM</dt>
+      <dd>
+        {% if has_custom_certificate %}
+        <span class="status-badge status-accepted">Tak</span>
+        {% else %}
+        <span class="status-badge status-failed">Nie</span>
+        {% endif %}
+      </dd>
+      <dt>Zachowanie aplikacji</dt>
+      <dd>{{ runtime_status }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="page-card">
+  <h2>Dodaj certyfikat i klucz</h2>
+  <p class="page-copy">Możesz wybrać pliki PEM z dysku albo wkleić ich treść ręcznie. Klucz nie jest wyświetlany ponownie po zapisaniu.</p>
+
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/certificate" class="form-stack" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+
+    <div class="form-group">
+      <label for="certificate_file">Plik certyfikatu PEM</label>
+      <input type="file" id="certificate_file" name="certificate_file" accept=".pem,.crt,.cer" />
+    </div>
+
+    <div class="form-group">
+      <label for="private_key_file">Plik klucza prywatnego PEM</label>
+      <input type="file" id="private_key_file" name="private_key_file" accept=".pem,.key" />
+    </div>
+
+    <div class="form-group">
+      <label for="certificate_pem">Certyfikat PEM ręcznie</label>
+      <textarea id="certificate_pem" name="certificate_pem" rows="12" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----">{{ certificate_pem }}</textarea>
+    </div>
+
+    <div class="form-group">
+      <label for="private_key_pem">Klucz prywatny PEM ręcznie</label>
+      <textarea id="private_key_pem" name="private_key_pem" rows="12" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----">{{ private_key_pem }}</textarea>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Zapisz certyfikat</button>
+      <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/" class="btn btn-secondary">Powrót</a>
+    </div>
+  </form>
+</div>
+
+{% if has_custom_certificate %}
+<div class="page-card">
+  <h2>Usuń zapisany certyfikat</h2>
+  <p class="page-copy">Po usunięciu aplikacja wróci do bieżącego trybu dla środowiska: w sandbox wygeneruje self-signed, a w production uwierzytelnianie bez certyfikatu przestanie działać.</p>
+  <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/certificate" enctype="multipart/form-data" onsubmit="return confirm('Usunąć zapisany certyfikat i klucz z tego konta?')">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+    <input type="hidden" name="action" value="clear" />
+    <div class="form-actions">
+      <button type="submit" class="btn btn-danger">Usuń certyfikat</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

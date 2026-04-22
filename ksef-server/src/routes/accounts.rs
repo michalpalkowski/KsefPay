@@ -1,8 +1,10 @@
 use askama::Template;
-use axum::extract::State;
+use axum::extract::{Multipart, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::Utc;
+use openssl::pkey::PKey;
+use openssl::x509::X509;
 use serde::Deserialize;
 use std::time::Duration;
 use tower_sessions::Session;
@@ -15,7 +17,7 @@ use ksef_core::infra::ksef::testdata::TestSubjectType;
 use ksef_core::infra::ksef::{KSeFApiClient, TestDataClient};
 use ksef_core::ports::ksef_client::KSeFClient;
 
-use crate::csrf::ensure_csrf_token;
+use crate::csrf::{CSRF_SESSION_KEY, ensure_csrf_token};
 use crate::extractors::{AuthUser, CsrfForm};
 use crate::state::AppState;
 
@@ -42,6 +44,23 @@ struct AccountAddTemplate {
     csrf_token: String,
 }
 
+#[derive(Template)]
+#[template(path = "pages/account_certificate.html")]
+struct AccountCertificateTemplate {
+    active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
+    account: NipAccount,
+    error: Option<String>,
+    success: Option<String>,
+    csrf_token: String,
+    has_custom_certificate: bool,
+    environment_name: &'static str,
+    runtime_status: String,
+    certificate_pem: String,
+    private_key_pem: String,
+}
+
 fn render<T: Template>(tmpl: T) -> Response {
     match tmpl.render() {
         Ok(html) => Html(html).into_response(),
@@ -64,12 +83,210 @@ fn render_with_status<T: Template>(status: StatusCode, tmpl: T) -> Response {
     }
 }
 
+fn render_certificate_page(
+    account: NipAccount,
+    user_email: String,
+    environment: KSeFEnvironment,
+    error: Option<String>,
+    success: Option<String>,
+    certificate_pem: String,
+    private_key_pem: String,
+    csrf_token: String,
+) -> Response {
+    let has_custom_certificate = account.cert_pem.is_some() && account.key_pem.is_some();
+    let environment_name = match environment {
+        KSeFEnvironment::Test => "test",
+        KSeFEnvironment::Demo => "demo",
+        KSeFEnvironment::Production => "production",
+    };
+    let runtime_status = match (environment, has_custom_certificate) {
+        (_, true) => {
+            "Przy następnym uwierzytelnieniu XAdES aplikacja użyje zapisanej pary certyfikat + klucz dla tego NIP."
+                .to_string()
+        }
+        (KSeFEnvironment::Production, false) => {
+            "Brak zapisanej pary certyfikat + klucz. W production logowanie XAdES dla tego NIP nie powiedzie się, dopóki ich nie dodasz."
+                .to_string()
+        }
+        (_, false) => {
+            "Brak zapisanej pary certyfikat + klucz. W środowisku test/demo aplikacja wygeneruje self-signed dla tego NIP przy uwierzytelnieniu."
+                .to_string()
+        }
+    };
+
+    render(AccountCertificateTemplate {
+        active: "/certificate",
+        nip_prefix: Some(account.nip.to_string()),
+        user_email,
+        account,
+        error,
+        success,
+        csrf_token,
+        has_custom_certificate,
+        environment_name,
+        runtime_status,
+        certificate_pem,
+        private_key_pem,
+    })
+}
+
+fn normalize_pem_input(raw: &str) -> String {
+    raw.replace("\r\n", "\n").trim().to_string()
+}
+
+fn validate_certificate_pair(cert_pem: &[u8], key_pem: &[u8]) -> Result<(), String> {
+    let cert = X509::from_pem(cert_pem)
+        .map_err(|e| format!("nie udało się odczytać certyfikatu PEM: {e}"))?;
+    let key = PKey::private_key_from_pem(key_pem)
+        .map_err(|e| format!("nie udało się odczytać klucza prywatnego PEM: {e}"))?;
+    let cert_public_key = cert
+        .public_key()
+        .map_err(|e| format!("nie udało się odczytać klucza publicznego z certyfikatu: {e}"))?;
+
+    if !cert_public_key.public_eq(&key) {
+        return Err("certyfikat nie pasuje do podanego klucza prywatnego".to_string());
+    }
+
+    Ok(())
+}
+
+async fn parse_certificate_upload(
+    mut multipart: Multipart,
+    session: &Session,
+) -> Result<CertificateUploadData, Response> {
+    let expected_csrf = session
+        .get::<String>(CSRF_SESSION_KEY)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("session read error: {e}"),
+            )
+                .into_response()
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::FORBIDDEN,
+                "Żądanie odrzucone: nieprawidłowy token CSRF",
+            )
+                .into_response()
+        })?;
+
+    let mut provided_csrf: Option<String> = None;
+    let mut upload = CertificateUploadData::default();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("nie udało się odczytać danych formularza: {e}"),
+        )
+            .into_response()
+    })? {
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "_csrf" => {
+                provided_csrf = Some(field.text().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("nie udało się odczytać tokenu CSRF: {e}"),
+                    )
+                        .into_response()
+                })?);
+            }
+            "action" => {
+                upload.action = field.text().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("nie udało się odczytać akcji formularza: {e}"),
+                    )
+                        .into_response()
+                })?;
+            }
+            "certificate_pem" => {
+                upload.certificate_pem_text = field.text().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("nie udało się odczytać pola certyfikatu: {e}"),
+                    )
+                        .into_response()
+                })?;
+            }
+            "private_key_pem" => {
+                upload.private_key_pem_text = field.text().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("nie udało się odczytać pola klucza prywatnego: {e}"),
+                    )
+                        .into_response()
+                })?;
+            }
+            "certificate_file" => {
+                let bytes = field.bytes().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("nie udało się odczytać pliku certyfikatu: {e}"),
+                    )
+                        .into_response()
+                })?;
+                if !bytes.is_empty() {
+                    upload.certificate_pem_file = Some(bytes.to_vec());
+                }
+            }
+            "private_key_file" => {
+                let bytes = field.bytes().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("nie udało się odczytać pliku klucza prywatnego: {e}"),
+                    )
+                        .into_response()
+                })?;
+                if !bytes.is_empty() {
+                    upload.private_key_pem_file = Some(bytes.to_vec());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if provided_csrf.as_deref() != Some(expected_csrf.as_str()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Żądanie odrzucone: nieprawidłowy token CSRF",
+        )
+            .into_response());
+    }
+
+    Ok(upload)
+}
+
+fn resolve_uploaded_pem(
+    uploaded: Option<Vec<u8>>,
+    pasted: &str,
+    label: &str,
+) -> Result<String, String> {
+    match uploaded {
+        Some(bytes) => String::from_utf8(bytes)
+            .map(|raw| normalize_pem_input(&raw))
+            .map_err(|e| format!("{label}: plik nie jest poprawnym tekstem UTF-8 PEM: {e}")),
+        None => Ok(normalize_pem_input(pasted)),
+    }
+}
+
 // --- Form data ---
 
 #[derive(Deserialize)]
 pub struct AddAccountFormData {
     pub nip: String,
     pub display_name: String,
+}
+
+#[derive(Default)]
+struct CertificateUploadData {
+    action: String,
+    certificate_pem_text: String,
+    private_key_pem_text: String,
+    certificate_pem_file: Option<Vec<u8>>,
+    private_key_pem_file: Option<Vec<u8>>,
 }
 
 const BOOTSTRAP_MAX_ATTEMPTS: u32 = 3;
@@ -324,4 +541,237 @@ pub async fn add(
     }
 
     Redirect::to("/accounts").into_response()
+}
+
+pub async fn certificate_form(
+    State(state): State<AppState>,
+    nip_ctx: crate::extractors::NipContext,
+    session: Session,
+) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    render_certificate_page(
+        nip_ctx.account,
+        nip_ctx.user.email,
+        state.ksef_environment,
+        None,
+        None,
+        String::new(),
+        String::new(),
+        csrf_token,
+    )
+}
+
+pub async fn certificate_save(
+    State(state): State<AppState>,
+    nip_ctx: crate::extractors::NipContext,
+    session: Session,
+    multipart: Multipart,
+) -> Response {
+    let upload = match parse_certificate_upload(multipart, &session).await {
+        Ok(upload) => upload,
+        Err(response) => return response,
+    };
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    let user_email = nip_ctx.user.email;
+    let mut account = nip_ctx.account;
+
+    if upload.action == "clear" {
+        account.cert_pem = None;
+        account.key_pem = None;
+        account.cert_auto_generated = false;
+        account.updated_at = Utc::now();
+
+        return match state.nip_account_repo.update_credentials(&account).await {
+            Ok(()) => render_certificate_page(
+                account,
+                user_email,
+                state.ksef_environment,
+                None,
+                Some("Usunięto zapisany certyfikat i klucz z konta.".to_string()),
+                String::new(),
+                String::new(),
+                csrf_token,
+            ),
+            Err(e) => render_certificate_page(
+                account,
+                user_email,
+                state.ksef_environment,
+                Some(format!(
+                    "Nie udało się usunąć zapisanych danych certyfikatu: {e}"
+                )),
+                None,
+                String::new(),
+                String::new(),
+                csrf_token,
+            ),
+        };
+    }
+
+    let certificate_pem = match resolve_uploaded_pem(
+        upload.certificate_pem_file,
+        &upload.certificate_pem_text,
+        "certyfikat",
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            return render_certificate_page(
+                account,
+                user_email,
+                state.ksef_environment,
+                Some(err),
+                None,
+                upload.certificate_pem_text,
+                upload.private_key_pem_text,
+                csrf_token,
+            );
+        }
+    };
+    let private_key_pem = match resolve_uploaded_pem(
+        upload.private_key_pem_file,
+        &upload.private_key_pem_text,
+        "klucz prywatny",
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            return render_certificate_page(
+                account,
+                user_email,
+                state.ksef_environment,
+                Some(err),
+                None,
+                certificate_pem,
+                upload.private_key_pem_text,
+                csrf_token,
+            );
+        }
+    };
+
+    if certificate_pem.is_empty() || private_key_pem.is_empty() {
+        return render_certificate_page(
+            account,
+            user_email,
+            state.ksef_environment,
+            Some("Podaj jednocześnie certyfikat PEM i klucz prywatny PEM.".to_string()),
+            None,
+            certificate_pem,
+            private_key_pem,
+            csrf_token,
+        );
+    }
+
+    if let Err(err) =
+        validate_certificate_pair(certificate_pem.as_bytes(), private_key_pem.as_bytes())
+    {
+        return render_certificate_page(
+            account,
+            user_email,
+            state.ksef_environment,
+            Some(err),
+            None,
+            certificate_pem,
+            private_key_pem,
+            csrf_token,
+        );
+    }
+
+    account.cert_pem = Some(certificate_pem.into_bytes());
+    account.key_pem = Some(private_key_pem.into_bytes());
+    account.cert_auto_generated = false;
+    account.updated_at = Utc::now();
+
+    match state.nip_account_repo.update_credentials(&account).await {
+        Ok(()) => render_certificate_page(
+            account,
+            user_email,
+            state.ksef_environment,
+            None,
+            Some(
+                "Zapisano certyfikat i klucz. Przy następnym uwierzytelnieniu XAdES aplikacja użyje tej pary dla tego NIP."
+                    .to_string(),
+            ),
+            String::new(),
+            String::new(),
+            csrf_token,
+        ),
+        Err(e) => render_certificate_page(
+            account,
+            user_email,
+            state.ksef_environment,
+            Some(format!("Nie udało się zapisać certyfikatu: {e}")),
+            None,
+            String::new(),
+            String::new(),
+            csrf_token,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_pem_input, resolve_uploaded_pem, validate_certificate_pair};
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::BigNum;
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::x509::X509;
+
+    fn generate_pair() -> (Vec<u8>, Vec<u8>) {
+        let rsa = Rsa::generate(2048).unwrap();
+        let pkey = PKey::from_rsa(rsa).unwrap();
+
+        let mut name = openssl::x509::X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "test-cert").unwrap();
+        let name = name.build();
+
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(&pkey).unwrap();
+        let serial = BigNum::from_u32(1).unwrap().to_asn1_integer().unwrap();
+        builder.set_serial_number(&serial).unwrap();
+        let not_before = Asn1Time::days_from_now(0).unwrap();
+        let not_after = Asn1Time::days_from_now(30).unwrap();
+        builder.set_not_before(&not_before).unwrap();
+        builder.set_not_after(&not_after).unwrap();
+        builder.sign(&pkey, MessageDigest::sha256()).unwrap();
+
+        let cert_pem = builder.build().to_pem().unwrap();
+        let key_pem = pkey.private_key_to_pem_pkcs8().unwrap();
+        (cert_pem, key_pem)
+    }
+
+    #[test]
+    fn normalize_pem_input_trims_and_normalizes_newlines() {
+        let normalized = normalize_pem_input("  line1\r\nline2\r\n");
+        assert_eq!(normalized, "line1\nline2");
+    }
+
+    #[test]
+    fn validate_certificate_pair_accepts_matching_pair() {
+        let (cert_pem, key_pem) = generate_pair();
+        assert!(validate_certificate_pair(&cert_pem, &key_pem).is_ok());
+    }
+
+    #[test]
+    fn validate_certificate_pair_rejects_mismatched_pair() {
+        let (cert_pem, _) = generate_pair();
+        let (_, other_key_pem) = generate_pair();
+        let err = validate_certificate_pair(&cert_pem, &other_key_pem).unwrap_err();
+        assert!(err.contains("nie pasuje"));
+    }
+
+    #[test]
+    fn resolve_uploaded_pem_prefers_uploaded_file_contents() {
+        let resolved =
+            resolve_uploaded_pem(Some(b" file\r\npem ".to_vec()), "ignored", "certyfikat").unwrap();
+        assert_eq!(resolved, "file\npem");
+    }
+
+    #[test]
+    fn resolve_uploaded_pem_uses_text_fallback_without_file() {
+        let resolved = resolve_uploaded_pem(None, " fallback\r\npem ", "certyfikat").unwrap();
+        assert_eq!(resolved, "fallback\npem");
+    }
 }

@@ -9,7 +9,7 @@ description = "KSeF e-invoice web dashboard — Axum + Askama standalone server"
 [dependencies]
 ksef-core = { path = "../ksef-core" }
 tokio.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["multipart"] }
 askama.workspace = true
 sqlx.workspace = true
 serde.workspace = true
@@ -21,6 +21,7 @@ uuid.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
 argon2.workspace = true
+openssl.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tower-sessions = "0.14"

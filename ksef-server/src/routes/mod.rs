@@ -33,6 +33,10 @@ pub fn router() -> Router<AppState> {
         .route("/profile/password", post(profile::change_password))
         .route("/accounts", get(accounts::list))
         .route("/accounts/add", get(accounts::add_form).post(accounts::add))
+        .route(
+            "/accounts/{nip}/certificate",
+            get(accounts::certificate_form).post(accounts::certificate_save),
+        )
         // NIP-scoped routes (uses NipContext extractor)
         .route("/accounts/{nip}", get(dashboard::dashboard))
         .route(
