@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{
     Currency, Direction, Invoice, InvoiceId, InvoiceStatus, InvoiceType, LineItem, Money, Party,
     PaymentMethod,
 };
 use crate::domain::job::{Job, JobId, JobStatus};
-use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::{DomainError, QueueError, RepositoryError};
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -83,13 +83,13 @@ impl InvoiceService {
     pub async fn create_draft(
         &self,
         input: CreateInvoiceInput,
-        account_id: NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Invoice, InvoiceServiceError> {
         let (total_net, total_vat, total_gross) = compute_totals(&input.line_items);
 
         let invoice = Invoice {
             id: InvoiceId::new(),
-            nip_account_id: account_id,
+            nip_account_id: scope.id().clone(),
             direction: input.direction,
             status: InvoiceStatus::Draft,
             invoice_type: input.invoice_type,
@@ -127,9 +127,9 @@ impl InvoiceService {
     pub async fn submit(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<(), InvoiceServiceError> {
-        let invoice = self.repo.find_by_id(id, account_id).await?;
+        let invoice = self.repo.find_by_id(id, scope).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Queued)?;
 
         let job = Job {
@@ -137,7 +137,8 @@ impl InvoiceService {
             job_type: "submit_invoice".to_string(),
             payload: serde_json::json!({
                 "invoice_id": id.to_string(),
-                "nip_account_id": account_id.to_string(),
+                "nip_account_id": scope.id().to_string(),
+                "nip": scope.nip().as_str(),
             }),
             status: JobStatus::Pending,
             attempts: 0,
@@ -149,13 +150,13 @@ impl InvoiceService {
         if let Some(ref atomic) = self.atomic {
             // ACID: both operations in one transaction
             let tx = atomic.begin().await?;
-            tx.find_by_id(id, account_id).await?;
-            tx.update_status(id, account_id, new_status).await?;
+            tx.find_by_id(id, scope).await?;
+            tx.update_status(id, scope, new_status).await?;
             tx.enqueue(job).await?;
             tx.commit().await?;
         } else {
             // Non-transactional fallback (unit tests with mocks)
-            self.repo.update_status(id, account_id, new_status).await?;
+            self.repo.update_status(id, scope, new_status).await?;
             self.queue.enqueue(job).await?;
         }
 
@@ -166,15 +167,15 @@ impl InvoiceService {
     pub async fn mark_submitted(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<(), InvoiceServiceError> {
-        let invoice = self.repo.find_by_id(id, account_id).await?;
+        let invoice = self.repo.find_by_id(id, scope).await?;
         if invoice.status == InvoiceStatus::Submitted {
             // Idempotent for retried jobs that already moved out of `Queued`.
             return Ok(());
         }
         let new_status = invoice.status.transition_to(InvoiceStatus::Submitted)?;
-        self.repo.update_status(id, account_id, new_status).await?;
+        self.repo.update_status(id, scope, new_status).await?;
         Ok(())
     }
 
@@ -182,23 +183,23 @@ impl InvoiceService {
     pub async fn mark_accepted(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &str,
     ) -> Result<(), InvoiceServiceError> {
         if let Some(ref atomic) = self.atomic {
             let tx = atomic.begin().await?;
-            let invoice = tx.find_by_id(id, account_id).await?;
+            let invoice = tx.find_by_id(id, scope).await?;
             let new_status = invoice.status.transition_to(InvoiceStatus::Accepted)?;
-            tx.update_status(id, account_id, new_status).await?;
-            tx.set_ksef_number(id, account_id, ksef_number).await?;
+            tx.update_status(id, scope, new_status).await?;
+            tx.set_ksef_number(id, scope, ksef_number).await?;
             tx.commit().await?;
             return Ok(());
         }
 
-        let invoice = self.repo.find_by_id(id, account_id).await?;
+        let invoice = self.repo.find_by_id(id, scope).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Accepted)?;
-        self.repo.update_status(id, account_id, new_status).await?;
-        self.repo.set_ksef_number(id, account_id, ksef_number).await?;
+        self.repo.update_status(id, scope, new_status).await?;
+        self.repo.set_ksef_number(id, scope, ksef_number).await?;
         Ok(())
     }
 
@@ -206,23 +207,23 @@ impl InvoiceService {
     pub async fn mark_rejected(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         error: &str,
     ) -> Result<(), InvoiceServiceError> {
         if let Some(ref atomic) = self.atomic {
             let tx = atomic.begin().await?;
-            let invoice = tx.find_by_id(id, account_id).await?;
+            let invoice = tx.find_by_id(id, scope).await?;
             let new_status = invoice.status.transition_to(InvoiceStatus::Rejected)?;
-            tx.update_status(id, account_id, new_status).await?;
-            tx.set_ksef_error(id, account_id, error).await?;
+            tx.update_status(id, scope, new_status).await?;
+            tx.set_ksef_error(id, scope, error).await?;
             tx.commit().await?;
             return Ok(());
         }
 
-        let invoice = self.repo.find_by_id(id, account_id).await?;
+        let invoice = self.repo.find_by_id(id, scope).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Rejected)?;
-        self.repo.update_status(id, account_id, new_status).await?;
-        self.repo.set_ksef_error(id, account_id, error).await?;
+        self.repo.update_status(id, scope, new_status).await?;
+        self.repo.set_ksef_error(id, scope, error).await?;
         Ok(())
     }
 
@@ -230,36 +231,40 @@ impl InvoiceService {
     pub async fn mark_failed(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         error: &str,
     ) -> Result<(), InvoiceServiceError> {
         if let Some(ref atomic) = self.atomic {
             let tx = atomic.begin().await?;
-            let invoice = tx.find_by_id(id, account_id).await?;
+            let invoice = tx.find_by_id(id, scope).await?;
             let new_status = invoice.status.transition_to(InvoiceStatus::Failed)?;
-            tx.update_status(id, account_id, new_status).await?;
-            tx.set_ksef_error(id, account_id, error).await?;
+            tx.update_status(id, scope, new_status).await?;
+            tx.set_ksef_error(id, scope, error).await?;
             tx.commit().await?;
             return Ok(());
         }
 
-        let invoice = self.repo.find_by_id(id, account_id).await?;
+        let invoice = self.repo.find_by_id(id, scope).await?;
         let new_status = invoice.status.transition_to(InvoiceStatus::Failed)?;
-        self.repo.update_status(id, account_id, new_status).await?;
-        self.repo.set_ksef_error(id, account_id, error).await?;
+        self.repo.update_status(id, scope, new_status).await?;
+        self.repo.set_ksef_error(id, scope, error).await?;
         Ok(())
     }
 
     pub async fn find(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Invoice, InvoiceServiceError> {
-        Ok(self.repo.find_by_id(id, account_id).await?)
+        Ok(self.repo.find_by_id(id, scope).await?)
     }
 
-    pub async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, InvoiceServiceError> {
-        Ok(self.repo.list(filter).await?)
+    pub async fn list(
+        &self,
+        scope: &AccountScope,
+        filter: &InvoiceFilter,
+    ) -> Result<Vec<Invoice>, InvoiceServiceError> {
+        Ok(self.repo.list(scope, filter).await?)
     }
 }
 
@@ -281,6 +286,8 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    use crate::domain::nip::Nip;
+    use crate::domain::nip_account::NipAccountId;
     use crate::test_support::fixtures::sample_invoice;
     use crate::test_support::mock_invoice_repo::MockInvoiceRepo;
     use crate::test_support::mock_job_queue::MockJobQueue;
@@ -314,22 +321,24 @@ mod tests {
         }
     }
 
-    fn test_account_id() -> NipAccountId {
-        NipAccountId::from_uuid(Uuid::from_u128(1))
+    fn test_scope() -> AccountScope {
+        let id = NipAccountId::from_uuid(Uuid::from_u128(1));
+        let nip = Nip::parse("5260250274").unwrap();
+        AccountScope::new(id, nip)
     }
 
     #[tokio::test]
     async fn create_draft_stores_invoice_with_draft_status() {
         let (service, repo, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
 
         assert_eq!(invoice.status, InvoiceStatus::Draft);
         assert_eq!(repo.count(), 1);
 
-        let found = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let found = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(found.invoice_number, "FV/2026/04/001");
     }
 
@@ -337,7 +346,7 @@ mod tests {
     async fn create_draft_computes_totals_from_line_items() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
 
@@ -350,7 +359,7 @@ mod tests {
     async fn create_draft_has_no_ksef_number() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
         assert!(invoice.ksef_number.is_none());
@@ -361,16 +370,13 @@ mod tests {
     async fn submit_transitions_draft_to_queued_and_enqueues_job() {
         let (service, _, queue) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
 
-        service
-            .submit(&invoice.id, &test_account_id())
-            .await
-            .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
 
-        let found = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let found = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Queued);
         assert_eq!(queue.count(), 1);
     }
@@ -379,16 +385,13 @@ mod tests {
     async fn submit_already_queued_returns_error() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
-        service
-            .submit(&invoice.id, &test_account_id())
-            .await
-            .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
 
         let err = service
-            .submit(&invoice.id, &test_account_id())
+            .submit(&invoice.id, &test_scope())
             .await
             .unwrap_err();
         assert!(matches!(
@@ -401,7 +404,7 @@ mod tests {
     async fn submit_nonexistent_returns_not_found() {
         let (service, _, _) = make_service();
         let err = service
-            .submit(&InvoiceId::new(), &test_account_id())
+            .submit(&InvoiceId::new(), &test_scope())
             .await
             .unwrap_err();
         assert!(matches!(
@@ -414,20 +417,17 @@ mod tests {
     async fn mark_submitted_transitions_queued_to_submitted() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
+
         service
-            .submit(&invoice.id, &test_account_id())
+            .mark_submitted(&invoice.id, &test_scope())
             .await
             .unwrap();
 
-        service
-            .mark_submitted(&invoice.id, &test_account_id())
-            .await
-            .unwrap();
-
-        let found = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let found = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Submitted);
     }
 
@@ -435,12 +435,12 @@ mod tests {
     async fn mark_submitted_from_draft_returns_error() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
 
         let err = service
-            .mark_submitted(&invoice.id, &test_account_id())
+            .mark_submitted(&invoice.id, &test_scope())
             .await
             .unwrap_err();
         assert!(matches!(err, InvoiceServiceError::Domain(_)));
@@ -450,24 +450,21 @@ mod tests {
     async fn mark_accepted_transitions_and_stores_ksef_number() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
         service
-            .submit(&invoice.id, &test_account_id())
-            .await
-            .unwrap();
-        service
-            .mark_submitted(&invoice.id, &test_account_id())
+            .mark_submitted(&invoice.id, &test_scope())
             .await
             .unwrap();
 
         service
-            .mark_accepted(&invoice.id, &test_account_id(), "KSeF-2026-04-ABC")
+            .mark_accepted(&invoice.id, &test_scope(), "KSeF-2026-04-ABC")
             .await
             .unwrap();
 
-        let found = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let found = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Accepted);
         assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-2026-04-ABC");
     }
@@ -476,28 +473,21 @@ mod tests {
     async fn mark_rejected_transitions_and_stores_error() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
         service
-            .submit(&invoice.id, &test_account_id())
-            .await
-            .unwrap();
-        service
-            .mark_submitted(&invoice.id, &test_account_id())
+            .mark_submitted(&invoice.id, &test_scope())
             .await
             .unwrap();
 
         service
-            .mark_rejected(
-                &invoice.id,
-                &test_account_id(),
-                "XML schema validation failed",
-            )
+            .mark_rejected(&invoice.id, &test_scope(), "XML schema validation failed")
             .await
             .unwrap();
 
-        let found = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let found = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Rejected);
         assert_eq!(
             found.ksef_error.as_deref(),
@@ -509,20 +499,17 @@ mod tests {
     async fn mark_failed_from_queued() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
+
         service
-            .submit(&invoice.id, &test_account_id())
+            .mark_failed(&invoice.id, &test_scope(), "max retries exceeded")
             .await
             .unwrap();
 
-        service
-            .mark_failed(&invoice.id, &test_account_id(), "max retries exceeded")
-            .await
-            .unwrap();
-
-        let found = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let found = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Failed);
         assert_eq!(found.ksef_error.as_deref(), Some("max retries exceeded"));
     }
@@ -531,12 +518,12 @@ mod tests {
     async fn mark_failed_from_draft_returns_error() {
         let (service, _, _) = make_service();
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
 
         let err = service
-            .mark_failed(&invoice.id, &test_account_id(), "err")
+            .mark_failed(&invoice.id, &test_scope(), "err")
             .await
             .unwrap_err();
         assert!(matches!(err, InvoiceServiceError::Domain(_)));
@@ -546,16 +533,16 @@ mod tests {
     async fn list_returns_all_invoices() {
         let (service, _, _) = make_service();
         service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
         service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
 
         let all = service
-            .list(&InvoiceFilter::for_account(test_account_id()))
+            .list(&test_scope(), &InvoiceFilter::new())
             .await
             .unwrap();
         assert_eq!(all.len(), 2);
@@ -566,28 +553,25 @@ mod tests {
         let (service, _, queue) = make_service();
 
         let invoice = service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
         assert_eq!(invoice.status, InvoiceStatus::Draft);
 
-        service
-            .submit(&invoice.id, &test_account_id())
-            .await
-            .unwrap();
+        service.submit(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(queue.count(), 1);
 
         service
-            .mark_submitted(&invoice.id, &test_account_id())
+            .mark_submitted(&invoice.id, &test_scope())
             .await
             .unwrap();
 
         service
-            .mark_accepted(&invoice.id, &test_account_id(), "KSeF-2026-FINAL")
+            .mark_accepted(&invoice.id, &test_scope(), "KSeF-2026-FINAL")
             .await
             .unwrap();
 
-        let final_invoice = service.find(&invoice.id, &test_account_id()).await.unwrap();
+        let final_invoice = service.find(&invoice.id, &test_scope()).await.unwrap();
         assert_eq!(final_invoice.status, InvoiceStatus::Accepted);
         assert_eq!(
             final_invoice.ksef_number.unwrap().as_str(),

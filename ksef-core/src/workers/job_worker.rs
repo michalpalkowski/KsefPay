@@ -4,8 +4,10 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{InvoiceId, InvoiceStatus};
 use crate::domain::job::Job;
+use crate::domain::nip::Nip;
 use crate::domain::nip_account::NipAccountId;
 use crate::error::KSeFError;
 use crate::ports::encryption::InvoiceEncryptor;
@@ -120,9 +122,9 @@ impl JobWorker {
                         }
                     };
 
-                    if let Some((invoice_id, account_id)) = ctx {
+                    if let Some((invoice_id, scope)) = ctx {
                         self.invoice_service
-                            .mark_failed(&invoice_id, &account_id, &error)
+                            .mark_failed(&invoice_id, &scope, &error)
                             .await
                             .map_err(|e| {
                                 format!(
@@ -155,18 +157,18 @@ impl JobWorker {
     }
 
     async fn handle_submit_invoice(&self, job: &Job) -> Result<(), String> {
-        let (invoice_id, account_id) = extract_job_context(job)?;
+        let (invoice_id, scope) = extract_job_context(job)?;
 
         let invoice = self
             .invoice_service
-            .find(&invoice_id, &account_id)
+            .find(&invoice_id, &scope)
             .await
             .map_err(|e| format!("failed to fetch invoice: {e}"))?;
 
         match invoice.status {
             InvoiceStatus::Queued => {
                 self.invoice_service
-                    .mark_submitted(&invoice_id, &account_id)
+                    .mark_submitted(&invoice_id, &scope)
                     .await
                     .map_err(|e| format!("failed to mark submitted: {e}"))?;
             }
@@ -186,7 +188,7 @@ impl JobWorker {
             let rejection_reason =
                 format!("XML schema validation failed before KSeF submission: {err}");
             self.invoice_service
-                .mark_rejected(&invoice_id, &account_id, &rejection_reason)
+                .mark_rejected(&invoice_id, &scope, &rejection_reason)
                 .await
                 .map_err(|e| format!("failed to mark invoice rejected: {e}"))?;
             return Ok(());
@@ -233,7 +235,7 @@ impl JobWorker {
                 if let Some(code) = terminal_rejection_code(&err) {
                     let rejection_reason = format!("KSeF invoice status {code}: {err}");
                     self.invoice_service
-                        .mark_rejected(&invoice_id, &account_id, &rejection_reason)
+                        .mark_rejected(&invoice_id, &scope, &rejection_reason)
                         .await
                         .map_err(|e| format!("failed to mark invoice rejected: {e}"))?;
 
@@ -260,7 +262,7 @@ impl JobWorker {
         );
 
         self.invoice_service
-            .mark_accepted(&invoice_id, &account_id, ksef_number.as_str())
+            .mark_accepted(&invoice_id, &scope, ksef_number.as_str())
             .await
             .map_err(|e| format!("failed to mark invoice accepted: {e}"))?;
 
@@ -297,7 +299,7 @@ fn terminal_rejection_code(err: &KSeFError) -> Option<i64> {
     }
 }
 
-fn extract_job_context(job: &Job) -> Result<(InvoiceId, NipAccountId), String> {
+fn extract_job_context(job: &Job) -> Result<(InvoiceId, AccountScope), String> {
     let raw_invoice_id = job
         .payload
         .get("invoice_id")
@@ -316,14 +318,24 @@ fn extract_job_context(job: &Job) -> Result<(InvoiceId, NipAccountId), String> {
         .parse::<NipAccountId>()
         .map_err(|_| format!("invalid nip_account_id in payload: {raw_account_id}"))?;
 
-    Ok((invoice_id, account_id))
+    let raw_nip = job
+        .payload
+        .get("nip")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "missing nip in payload".to_string())?;
+    let nip =
+        Nip::parse(raw_nip).map_err(|e| format!("invalid nip in payload '{raw_nip}': {e}"))?;
+
+    Ok((invoice_id, AccountScope::new(account_id, nip)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::account_scope::AccountScope;
     use crate::domain::environment::KSeFEnvironment;
     use crate::domain::job::JobStatus;
+    use crate::domain::nip::Nip;
     use crate::domain::nip_account::NipAccountId;
     use crate::infra::fa3::{Fa3XmlConverter, Fa3XsdValidator};
     use crate::services::invoice_service::{CreateInvoiceInput, InvoiceService};
@@ -371,8 +383,10 @@ mod tests {
         }
     }
 
-    fn test_account_id() -> NipAccountId {
-        NipAccountId::from_uuid(uuid::Uuid::from_u128(1))
+    fn test_scope() -> AccountScope {
+        let id = NipAccountId::from_uuid(uuid::Uuid::from_u128(1));
+        let nip = Nip::parse("5260250274").unwrap();
+        AccountScope::new(id, nip)
     }
 
     fn make_worker() -> (JobWorker, Arc<MockJobQueue>, Arc<InvoiceService>) {
@@ -414,11 +428,11 @@ mod tests {
 
         // Create and submit an invoice (Draft -> Queued, enqueues job)
         let invoice = invoice_service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
         invoice_service
-            .submit(&invoice.id, &test_account_id())
+            .submit(&invoice.id, &test_scope())
             .await
             .unwrap();
 
@@ -427,7 +441,7 @@ mod tests {
 
         // Invoice should be Accepted now (full submit flow).
         let found = invoice_service
-            .find(&invoice.id, &test_account_id())
+            .find(&invoice.id, &test_scope())
             .await
             .unwrap();
         assert_eq!(
@@ -564,18 +578,18 @@ mod tests {
         );
 
         let invoice = invoice_service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
         invoice_service
-            .submit(&invoice.id, &test_account_id())
+            .submit(&invoice.id, &test_scope())
             .await
             .unwrap();
 
         worker.tick().await.unwrap();
 
         let found = invoice_service
-            .find(&invoice.id, &test_account_id())
+            .find(&invoice.id, &test_scope())
             .await
             .unwrap();
         assert_eq!(
@@ -625,18 +639,18 @@ mod tests {
         );
 
         let invoice = invoice_service
-            .create_draft(make_input(), test_account_id())
+            .create_draft(make_input(), &test_scope())
             .await
             .unwrap();
         invoice_service
-            .submit(&invoice.id, &test_account_id())
+            .submit(&invoice.id, &test_scope())
             .await
             .unwrap();
 
         worker.tick().await.unwrap();
 
         let found = invoice_service
-            .find(&invoice.id, &test_account_id())
+            .find(&invoice.id, &test_scope())
             .await
             .unwrap();
         assert_eq!(

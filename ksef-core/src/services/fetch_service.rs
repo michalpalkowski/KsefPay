@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::Direction;
-use crate::domain::nip::Nip;
-use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::{InvoiceQuery, KSeFNumber};
 use crate::domain::xml::InvoiceXml;
 use crate::error::{KSeFError, RepositoryError, XmlError};
@@ -83,19 +82,18 @@ impl FetchService {
         }
     }
 
-    /// Fetch invoices from `KSeF` for the given query and NIP.
+    /// Fetch invoices from `KSeF` for the given query and scope.
     /// Delegates to [`Self::fetch_invoices_with_progress`] with a no-op progress callback.
     pub async fn fetch_invoices(
         &self,
-        nip: &Nip,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         query: &InvoiceQuery,
     ) -> Result<FetchResult, FetchServiceError> {
-        self.fetch_invoices_with_progress(nip, account_id, query, |_| {})
+        self.fetch_invoices_with_progress(scope, query, |_| {})
             .await
     }
 
-    /// Fetch invoices from `KSeF` for the given query and NIP.
+    /// Fetch invoices from `KSeF` for the given query and scope.
     ///
     /// 1. Authenticate (ensure valid access token for this NIP)
     /// 2. Query invoice metadata from `KSeF` (retries on rate-limit, calls `on_progress`)
@@ -104,12 +102,11 @@ impl FetchService {
     /// One failed invoice doesn't abort the batch — errors are collected in `FetchResult.errors`.
     pub async fn fetch_invoices_with_progress(
         &self,
-        nip: &Nip,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         query: &InvoiceQuery,
         on_progress: impl Fn(&str) + Send,
     ) -> Result<FetchResult, FetchServiceError> {
-        let token_pair = self.session_service.ensure_token(nip).await?;
+        let token_pair = self.session_service.ensure_token(scope.nip()).await?;
         let metadata_list = self
             .query_metadata_with_rate_limit_retry(&token_pair.access_token, query, &on_progress)
             .await?;
@@ -129,7 +126,7 @@ impl FetchService {
             match self
                 .process_single_invoice(
                     &token_pair.access_token,
-                    account_id,
+                    scope,
                     &metadata.ksef_number,
                     direction,
                 )
@@ -164,13 +161,12 @@ impl FetchService {
     /// Returns `true` if the invoice was already present (update), `false` if newly inserted.
     pub async fn retry_invoice(
         &self,
-        nip: &Nip,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &KSeFNumber,
         direction: Direction,
     ) -> Result<bool, FetchServiceError> {
-        let token_pair = self.session_service.ensure_token(nip).await?;
-        self.process_single_invoice(&token_pair.access_token, account_id, ksef_number, direction)
+        let token_pair = self.session_service.ensure_token(scope.nip()).await?;
+        self.process_single_invoice(&token_pair.access_token, scope, ksef_number, direction)
             .await
             .map_err(FetchServiceError::Process)
     }
@@ -211,7 +207,7 @@ impl FetchService {
     async fn process_single_invoice(
         &self,
         access_token: &crate::domain::auth::AccessToken,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &KSeFNumber,
         direction: Direction,
     ) -> Result<bool, ProcessError> {
@@ -219,13 +215,13 @@ impl FetchService {
         // for this account. We still treat this as "updated/existing" in counters.
         let existing = self
             .repo
-            .find_by_ksef_number_and_account(ksef_number, account_id)
+            .find_by_ksef_number_and_account(ksef_number, scope)
             .await
             .map_err(ProcessError::Database)?;
         if existing.is_some() {
             debug!(
                 ksef_number = %ksef_number,
-                account_id = ?account_id,
+                account_id = ?scope.id(),
                 "invoice already cached locally; skipping re-fetch"
             );
             return Ok(true);
@@ -247,7 +243,7 @@ impl FetchService {
             .xml_converter
             .from_xml(&xml, direction, ksef_number)
             .map_err(ProcessError::Parse)?;
-        invoice.nip_account_id = account_id.clone();
+        invoice.nip_account_id = scope.id().clone();
 
         self.repo
             .upsert_by_ksef_number(&invoice)
@@ -261,8 +257,10 @@ impl FetchService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::account_scope::AccountScope;
     use crate::domain::environment::KSeFEnvironment;
     use crate::domain::invoice::InvoiceStatus;
+    use crate::domain::nip::Nip;
     use crate::domain::nip_account::NipAccountId;
     use crate::domain::session::SubjectType;
     use crate::infra::fa3::{Fa3XmlConverter, invoice_to_xml};
@@ -271,12 +269,10 @@ mod tests {
     use crate::test_support::mock_ksef::{MockKSeFAuth, MockKSeFClient, MockXadesSigner};
     use crate::test_support::mock_session_repo::MockSessionRepo;
 
-    fn test_nip() -> Nip {
-        Nip::parse("5260250274").unwrap()
-    }
-
-    fn test_account_id() -> NipAccountId {
-        NipAccountId::from_uuid(uuid::Uuid::from_u128(1))
+    fn test_scope() -> AccountScope {
+        let id = NipAccountId::from_uuid(uuid::Uuid::from_u128(1));
+        let nip = Nip::parse("5260250274").unwrap();
+        AccountScope::new(id, nip)
     }
 
     fn make_service() -> (FetchService, Arc<MockKSeFClient>, Arc<MockInvoiceRepo>) {
@@ -312,10 +308,7 @@ mod tests {
         let (service, _, _) = make_service();
         let query = make_query(SubjectType::Subject2);
 
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 0);
@@ -338,10 +331,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 1);
         assert_eq!(result.updated, 0);
@@ -373,10 +363,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 1);
         assert_eq!(result.updated, 0);
@@ -408,10 +395,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 1);
@@ -437,10 +421,7 @@ mod tests {
         ));
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 0);
@@ -465,10 +446,7 @@ mod tests {
         );
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.updated, 0);
@@ -496,10 +474,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject1);
-        service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         let found = repo.find_by_ksef_number(&ksef_num).await.unwrap().unwrap();
         assert_eq!(found.direction, Direction::Outgoing);
@@ -523,10 +498,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
         assert_eq!(result.inserted, 1);
         assert!(result.errors.is_empty());
 
@@ -586,20 +558,14 @@ mod tests {
         client.set_fetch_xml(xml.clone());
 
         let query = make_query(SubjectType::Subject2);
-        service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         let first = repo.find_by_ksef_number(&ksef_num).await.unwrap().unwrap();
         let first_id = first.id.clone();
 
         // Second fetch — same ksef_number
         client.set_fetch_xml(xml);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
         assert_eq!(result.updated, 1);
         assert_eq!(result.inserted, 0);
 
@@ -642,10 +608,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject2);
-        let result = service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        let result = service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         // Both should insert successfully (different ksef_numbers from mock perspective)
         // but our mock fetch returns the same XML which gets parsed with different ksef_numbers
@@ -678,10 +641,7 @@ mod tests {
         client.set_fetch_xml(xml);
 
         let query = make_query(SubjectType::Subject3);
-        service
-            .fetch_invoices(&test_nip(), &test_account_id(), &query)
-            .await
-            .unwrap();
+        service.fetch_invoices(&test_scope(), &query).await.unwrap();
 
         let found = repo.find_by_ksef_number(&ksef_num).await.unwrap().unwrap();
         assert_eq!(found.direction, Direction::Incoming);
