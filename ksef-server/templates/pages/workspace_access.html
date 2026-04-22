@@ -45,10 +45,11 @@
       </div>
       <div class="form-row">
         <label for="role">Rola</label>
-        <select id="role" name="role">
-          <option value="admin"{% if selected_role == "admin" %} selected{% endif %}>Admin</option>
+        <select id="role" name="role" required>
+          <option value="" disabled{% if selected_role == "" %} selected{% endif %}>Wybierz rolę</option>
           <option value="operator"{% if selected_role == "operator" %} selected{% endif %}>Operator</option>
           <option value="read_only"{% if selected_role == "read_only" %} selected{% endif %}>Read only</option>
+          <option value="admin"{% if selected_role == "admin" %} selected{% endif %}>Admin</option>
         </select>
         <small class="form-hint">Rola określa zakres pracy we wspólnym workspace, nie tworzy osobnej przestrzeni danych.</small>
       </div>

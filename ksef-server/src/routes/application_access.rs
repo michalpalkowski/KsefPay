@@ -217,7 +217,6 @@ pub async fn create_invite(
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     let email = normalize_email(&form.email);
-    let pending_invites = load_pending_invites(&state).await.unwrap_or_default();
 
     if let Err(err) = ensure_bootstrap_admin(&state, &workspace_ctx).await {
         return render_application_access(
@@ -226,11 +225,27 @@ pub async fn create_invite(
             false,
             csrf_token,
             email,
-            pending_invites,
+            Vec::new(),
             Some(err.to_string()),
             None,
         );
     }
+
+    let pending_invites = match load_pending_invites(&state).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_application_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                true,
+                csrf_token,
+                email,
+                Vec::new(),
+                Some(err),
+                None,
+            );
+        }
+    };
 
     if !is_valid_email(&email) {
         return render_application_access(
@@ -296,7 +311,23 @@ pub async fn create_invite(
             .application_access_repo
             .revoke_invite(&invite.id)
             .await;
-        let pending_invites = load_pending_invites(&state).await.unwrap_or_default();
+        let pending_invites = match load_pending_invites(&state).await {
+            Ok(invites) => invites,
+            Err(load_err) => {
+                return render_application_access(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    email,
+                    Vec::new(),
+                    Some(format!(
+                        "Nie udało się wysłać zaproszenia email: {err}. Dodatkowo nie udało się odświeżyć listy zaproszeń: {load_err}"
+                    )),
+                    None,
+                );
+            }
+        };
         return render_application_access(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             &workspace_ctx,
@@ -309,7 +340,21 @@ pub async fn create_invite(
         );
     }
 
-    let pending_invites = load_pending_invites(&state).await.unwrap_or_default();
+    let pending_invites = match load_pending_invites(&state).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_application_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                true,
+                csrf_token,
+                String::new(),
+                Vec::new(),
+                Some(err),
+                None,
+            );
+        }
+    };
     render_application_access(
         axum::http::StatusCode::OK,
         &workspace_ctx,
@@ -333,7 +378,6 @@ pub async fn revoke_invite(
     CsrfForm(_form): CsrfForm<RevokeApplicationAccessInviteFormData>,
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
-    let pending_invites = load_pending_invites(&state).await.unwrap_or_default();
 
     if let Err(err) = ensure_bootstrap_admin(&state, &workspace_ctx).await {
         return render_application_access(
@@ -342,11 +386,27 @@ pub async fn revoke_invite(
             false,
             csrf_token,
             String::new(),
-            pending_invites,
+            Vec::new(),
             Some(err.to_string()),
             None,
         );
     }
+
+    let pending_invites = match load_pending_invites(&state).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_application_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                true,
+                csrf_token,
+                String::new(),
+                Vec::new(),
+                Some(err),
+                None,
+            );
+        }
+    };
 
     let invite_id: ApplicationAccessInviteId = match invite_id_raw.parse() {
         Ok(invite_id) => invite_id,
@@ -364,14 +424,23 @@ pub async fn revoke_invite(
         }
     };
 
-    if !state
-        .application_access_repo
-        .list_pending_invites()
-        .await
-        .unwrap_or_default()
-        .iter()
-        .any(|invite| invite.id == invite_id)
-    {
+    let pending_for_check = match state.application_access_repo.list_pending_invites().await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_application_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                true,
+                csrf_token,
+                String::new(),
+                pending_invites,
+                Some(format!("Nie udało się sprawdzić zaproszenia: {err}")),
+                None,
+            );
+        }
+    };
+
+    if !pending_for_check.iter().any(|invite| invite.id == invite_id) {
         return render_application_access(
             axum::http::StatusCode::NOT_FOUND,
             &workspace_ctx,
@@ -401,7 +470,21 @@ pub async fn revoke_invite(
         );
     }
 
-    let pending_invites = load_pending_invites(&state).await.unwrap_or_default();
+    let pending_invites = match load_pending_invites(&state).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_application_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                true,
+                csrf_token,
+                String::new(),
+                Vec::new(),
+                Some(err),
+                None,
+            );
+        }
+    };
     render_application_access(
         axum::http::StatusCode::OK,
         &workspace_ctx,
@@ -715,6 +798,51 @@ mod tests {
             .await
             .unwrap();
         assert!(invites.is_empty());
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn expired_application_access_invite_does_not_block_resend() {
+        let sender = Arc::new(RecordingEmailSender::default());
+        let (state, db_path) = test_state(sender.clone()).await;
+        let admin = make_user("admin@example.com");
+        state.user_repo.create(&admin).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &admin).await;
+
+        state
+            .application_access_repo
+            .create_invite(&ApplicationAccessInvite {
+                id: ApplicationAccessInviteId::new(),
+                email: "expired.user@example.com".to_string(),
+                token_hash: "expired-app-access-route".to_string(),
+                expires_at: Utc::now() - chrono::Duration::days(1),
+                accepted_at: None,
+                revoked_at: None,
+                created_by_user_id: admin.id.clone(),
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let response = create_invite(
+            State(state.clone()),
+            workspace_ctx,
+            session_with_csrf("csrf").await,
+            CsrfForm(CreateApplicationAccessInviteFormData {
+                email: "expired.user@example.com".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let invites = state
+            .application_access_repo
+            .list_pending_invites()
+            .await
+            .unwrap();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].email, "expired.user@example.com");
 
         let _ = std::fs::remove_file(db_path);
     }

@@ -306,6 +306,10 @@ fn invite_url(base_url: &str, raw_token: &str) -> String {
     )
 }
 
+fn is_local_absolute_path(target: &str) -> bool {
+    target.starts_with('/') && !target.starts_with("//") && !target.contains(':')
+}
+
 async fn ensure_manage_members(
     workspace_ctx: &WorkspaceContext,
 ) -> Result<(), WorkspaceAccessError> {
@@ -333,19 +337,33 @@ pub async fn access_page(
     workspace_ctx: WorkspaceContext,
     session: Session,
 ) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     if let Err(err) = ensure_manage_members(&workspace_ctx).await {
-        return (axum::http::StatusCode::FORBIDDEN, err.to_string()).into_response();
+        return render_workspace_access(
+            axum::http::StatusCode::FORBIDDEN,
+            &workspace_ctx,
+            csrf_token,
+            Vec::new(),
+            String::new(),
+            "operator".to_string(),
+            Some(err.to_string()),
+            None,
+        );
     }
 
-    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await {
         Ok(invites) => invites,
         Err(err) => {
-            return (
+            return render_workspace_access(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Nie udało się pobrać zaproszeń: {err}"),
-            )
-                .into_response();
+                &workspace_ctx,
+                csrf_token,
+                Vec::new(),
+                String::new(),
+                "operator".to_string(),
+                Some(format!("Nie udało się pobrać zaproszeń: {err}")),
+                None,
+            );
         }
     };
 
@@ -439,9 +457,6 @@ pub async fn create_invite(
     CsrfForm(form): CsrfForm<CreateInviteFormData>,
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
-    let pending_invites = load_pending_invites(&state, &workspace_ctx.workspace.id)
-        .await
-        .unwrap_or_default();
     let email = normalize_email(&form.email);
     let selected_role = form.role.clone();
 
@@ -450,13 +465,29 @@ pub async fn create_invite(
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             csrf_token,
-            pending_invites,
+            Vec::new(),
             email,
             selected_role,
             Some(err.to_string()),
             None,
         );
     }
+
+    let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_workspace_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                csrf_token,
+                Vec::new(),
+                email,
+                selected_role,
+                Some(format!("Nie udało się pobrać zaproszeń: {err}")),
+                None,
+            );
+        }
+    };
 
     let role = match parse_invite_role(&form.role) {
         Ok(role) => role,
@@ -583,9 +614,24 @@ pub async fn create_invite(
     };
     if let Err(err) = dispatch_workspace_invite(state.email_sender.clone(), invite_email).await {
         let _ = state.workspace_repo.revoke_invite(&invite.id).await;
-        let pending_invites = load_pending_invites(&state, &workspace_ctx.workspace.id)
-            .await
-            .unwrap_or_default();
+        let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await
+        {
+            Ok(invites) => invites,
+            Err(load_err) => {
+                return render_workspace_access(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &workspace_ctx,
+                    csrf_token,
+                    Vec::new(),
+                    email,
+                    selected_role,
+                    Some(format!(
+                        "Nie udało się wysłać zaproszenia email: {err}. Dodatkowo nie udało się odświeżyć listy zaproszeń: {load_err}"
+                    )),
+                    None,
+                );
+            }
+        };
         return render_workspace_access(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             &workspace_ctx,
@@ -598,9 +644,21 @@ pub async fn create_invite(
         );
     }
 
-    let pending_invites = load_pending_invites(&state, &workspace_ctx.workspace.id)
-        .await
-        .unwrap_or_default();
+    let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_workspace_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                csrf_token,
+                Vec::new(),
+                String::new(),
+                "operator".to_string(),
+                Some(format!("Nie udało się odświeżyć listy zaproszeń: {err}")),
+                None,
+            );
+        }
+    };
 
     render_workspace_access(
         axum::http::StatusCode::OK,
@@ -622,22 +680,35 @@ pub async fn revoke_invite(
     CsrfForm(_form): CsrfForm<RevokeInviteFormData>,
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
-    let pending_invites = load_pending_invites(&state, &workspace_ctx.workspace.id)
-        .await
-        .unwrap_or_default();
 
     if let Err(err) = ensure_manage_members(&workspace_ctx).await {
         return render_workspace_access(
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             csrf_token,
-            pending_invites,
+            Vec::new(),
             String::new(),
             "operator".to_string(),
             Some(err.to_string()),
             None,
         );
     }
+
+    let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_workspace_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                csrf_token,
+                Vec::new(),
+                String::new(),
+                "operator".to_string(),
+                Some(format!("Nie udało się pobrać zaproszeń: {err}")),
+                None,
+            );
+        }
+    };
 
     let invite_id: WorkspaceInviteId = match invite_id_raw.parse() {
         Ok(invite_id) => invite_id,
@@ -655,14 +726,27 @@ pub async fn revoke_invite(
         }
     };
 
-    if !state
+    let pending_for_check = match state
         .workspace_repo
         .list_pending_invites(&workspace_ctx.workspace.id)
         .await
-        .unwrap_or_default()
-        .iter()
-        .any(|invite| invite.id == invite_id)
     {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_workspace_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                csrf_token,
+                pending_invites,
+                String::new(),
+                "operator".to_string(),
+                Some(format!("Nie udało się sprawdzić zaproszenia: {err}")),
+                None,
+            );
+        }
+    };
+
+    if !pending_for_check.iter().any(|invite| invite.id == invite_id) {
         return render_workspace_access(
             axum::http::StatusCode::NOT_FOUND,
             &workspace_ctx,
@@ -688,9 +772,21 @@ pub async fn revoke_invite(
         );
     }
 
-    let pending_invites = load_pending_invites(&state, &workspace_ctx.workspace.id)
-        .await
-        .unwrap_or_default();
+    let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await {
+        Ok(invites) => invites,
+        Err(err) => {
+            return render_workspace_access(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &workspace_ctx,
+                csrf_token,
+                Vec::new(),
+                String::new(),
+                "operator".to_string(),
+                Some(format!("Nie udało się odświeżyć listy zaproszeń: {err}")),
+                None,
+            );
+        }
+    };
     render_workspace_access(
         axum::http::StatusCode::OK,
         &workspace_ctx,
@@ -728,7 +824,10 @@ async fn try_select_workspace(
         .await
         .map_err(|e| SelectWorkspaceError::Session(format!("Błąd sesji: {e}")))?;
 
-    Ok(form.return_to.unwrap_or_else(|| "/accounts".to_string()))
+    Ok(form
+        .return_to
+        .filter(|target| is_local_absolute_path(target))
+        .unwrap_or_else(|| "/accounts".to_string()))
 }
 
 #[cfg(test)]
@@ -1075,6 +1174,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_invite_does_not_block_reinvite() {
+        let sender = Arc::new(RecordingEmailSender::default());
+        let (state, db_path) = test_state(sender.clone()).await;
+        let owner = make_user("owner@example.com");
+        state.user_repo.create(&owner).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
+
+        state
+            .workspace_repo
+            .create_invite(&WorkspaceInvite {
+                id: WorkspaceInviteId::new(),
+                workspace_id: workspace_ctx.workspace.id.clone(),
+                email: "expired.user@example.com".to_string(),
+                role: WorkspaceRole::Operator,
+                token_hash: "expired-workspace-route-invite".to_string(),
+                expires_at: Utc::now() - chrono::Duration::days(1),
+                accepted_at: None,
+                revoked_at: None,
+                created_by_user_id: owner.id.clone(),
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let response = create_invite(
+            State(state.clone()),
+            workspace_ctx.clone(),
+            session_with_csrf("csrf").await,
+            CsrfForm(CreateInviteFormData {
+                email: "expired.user@example.com".to_string(),
+                role: "operator".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let invites = state
+            .workspace_repo
+            .list_pending_invites(&workspace_ctx.workspace.id)
+            .await
+            .unwrap();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].email, "expired.user@example.com");
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
     async fn create_workspace_creates_independent_workspace_and_switches_session() {
         let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
         let owner = make_user("owner@example.com");
@@ -1132,6 +1279,37 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response_text(response).await;
         assert!(body.contains("workspace name is required"));
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn select_workspace_ignores_external_return_to() {
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let owner = make_user("owner@example.com");
+        state.user_repo.create(&owner).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
+        let session = session_with_csrf("csrf").await;
+
+        let response = select(
+            State(state),
+            AuthUser {
+                id: owner.id.clone(),
+                email: owner.email.clone(),
+            },
+            session,
+            CsrfForm(SelectWorkspaceFormData {
+                workspace_id: workspace_ctx.workspace.id.to_string(),
+                return_to: Some("https://evil.example/steal".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get("location").unwrap(),
+            "/accounts"
+        );
 
         let _ = std::fs::remove_file(db_path);
     }

@@ -394,55 +394,55 @@ async fn resolve_registration_authorization(
 
 async fn apply_workspace_invite(
     state: &AppState,
-    session: &Session,
     user: &User,
     invite: &WorkspaceInvite,
-) -> Result<(), RepositoryError> {
+) -> Result<ksef_core::domain::workspace::WorkspaceId, RepositoryError> {
     state
         .workspace_repo
-        .add_member(&invite.workspace_id, &user.id, invite.role)
+        .activate_invite_membership(invite, &user.id)
         .await?;
-    state.workspace_repo.accept_invite(&invite.id).await?;
-    session
-        .insert(
-            CURRENT_WORKSPACE_SESSION_KEY,
-            invite.workspace_id.to_string(),
-        )
-        .await
-        .map_err(|e| RepositoryError::Storage(format!("session write error: {e}")))?;
-    Ok(())
+    Ok(invite.workspace_id.clone())
 }
 
 async fn prepare_independent_workspace(
     state: &AppState,
-    session: &Session,
     user: &User,
-) -> Result<(), RepositoryError> {
+) -> Result<ksef_core::domain::workspace::WorkspaceId, RepositoryError> {
     let workspace = state
         .workspace_repo
         .ensure_default_workspace(&user.id, &user.email)
         .await?;
-    session
-        .insert(
-            CURRENT_WORKSPACE_SESSION_KEY,
-            workspace.workspace.id.to_string(),
-        )
-        .await
-        .map_err(|e| RepositoryError::Storage(format!("session write error: {e}")))?;
-    Ok(())
+    Ok(workspace.workspace.id)
 }
 
 async fn apply_application_access_invite(
     state: &AppState,
-    session: &Session,
     user: &User,
     invite: &ApplicationAccessInvite,
-) -> Result<(), RepositoryError> {
-    state
+) -> Result<ksef_core::domain::workspace::WorkspaceId, RepositoryError> {
+    let workspace = state
         .application_access_repo
-        .accept_invite(&invite.id)
+        .activate_application_access(&invite.id, &user.id, &user.email)
         .await?;
-    prepare_independent_workspace(state, session, user).await
+    Ok(workspace.workspace.id)
+}
+
+async fn persist_authenticated_session(
+    session: &Session,
+    user_id: &UserId,
+    workspace_id: &ksef_core::domain::workspace::WorkspaceId,
+) -> Result<(), RepositoryError> {
+    session
+        .insert(CURRENT_WORKSPACE_SESSION_KEY, workspace_id.to_string())
+        .await
+        .map_err(|e| RepositoryError::Storage(format!("session write error: {e}")))?;
+
+    if let Err(err) = session.insert("user_id", user_id.to_string()).await {
+        let _ = session.remove::<String>(CURRENT_WORKSPACE_SESSION_KEY).await;
+        return Err(RepositoryError::Storage(format!("session write error: {err}")));
+    }
+
+    Ok(())
 }
 
 fn is_valid_email(email: &str) -> bool {
@@ -634,28 +634,20 @@ pub async fn login(
         );
     }
 
-    if let Err(e) = session.insert("user_id", user.id.to_string()).await {
-        return render_login_template(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Some(format!("Błąd sesji: {e}")),
-            email,
-            csrf_token,
-            tokens,
-            None,
-        );
-    }
-
-    match tokens.kind() {
+    let workspace_id = match tokens.kind() {
         InviteKind::None => {
-            if let Err(e) = prepare_independent_workspace(&state, &session, &user).await {
-                return render_login_template(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Nie udało się przygotować workspace: {e}")),
-                    email,
-                    csrf_token,
-                    tokens,
-                    None,
-                );
+            match prepare_independent_workspace(&state, &user).await {
+                Ok(workspace_id) => workspace_id,
+                Err(e) => {
+                    return render_login_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!("Nie udało się przygotować workspace: {e}")),
+                        email,
+                        csrf_token,
+                        tokens,
+                        None,
+                    );
+                }
             }
         }
         InviteKind::Workspace => {
@@ -682,15 +674,18 @@ pub async fn login(
                     Some(workspace_invite_message(&state, &invite).await),
                 );
             }
-            if let Err(err) = apply_workspace_invite(&state, &session, &user, &invite).await {
-                return render_login_template(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Nie udało się aktywować zaproszenia: {err}")),
-                    email,
-                    csrf_token,
-                    tokens.clone(),
-                    Some(workspace_invite_message(&state, &invite).await),
-                );
+            match apply_workspace_invite(&state, &user, &invite).await {
+                Ok(workspace_id) => workspace_id,
+                Err(err) => {
+                    return render_login_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!("Nie udało się aktywować zaproszenia: {err}")),
+                        email,
+                        csrf_token,
+                        tokens.clone(),
+                        Some(workspace_invite_message(&state, &invite).await),
+                    );
+                }
             }
         }
         InviteKind::ApplicationAccess => {
@@ -720,21 +715,33 @@ pub async fn login(
                     Some(application_access_invite_message(&state, &invite).await),
                 );
             }
-            if let Err(err) =
-                apply_application_access_invite(&state, &session, &user, &invite).await
-            {
-                return render_login_template(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!(
-                        "Nie udało się aktywować dostępu do aplikacji: {err}"
-                    )),
-                    email,
-                    csrf_token,
-                    tokens.clone(),
-                    Some(application_access_invite_message(&state, &invite).await),
-                );
+            match apply_application_access_invite(&state, &user, &invite).await {
+                Ok(workspace_id) => workspace_id,
+                Err(err) => {
+                    return render_login_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!(
+                            "Nie udało się aktywować dostępu do aplikacji: {err}"
+                        )),
+                        email,
+                        csrf_token,
+                        tokens.clone(),
+                        Some(application_access_invite_message(&state, &invite).await),
+                    );
+                }
             }
         }
+    };
+
+    if let Err(e) = persist_authenticated_session(&session, &user.id, &workspace_id).await {
+        return render_login_template(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(format!("Błąd sesji: {e}")),
+            email,
+            csrf_token,
+            tokens,
+            None,
+        );
     }
 
     log_audit_action(
@@ -998,7 +1005,57 @@ pub async fn register(
         );
     }
 
-    if let Err(e) = session.insert("user_id", user.id.to_string()).await {
+    let workspace_id = match authorization {
+        RegistrationAuthorization::BootstrapAdmin => {
+            match prepare_independent_workspace(&state, &user).await {
+                Ok(workspace_id) => workspace_id,
+                Err(e) => {
+                    return render_register_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!("Nie udało się przygotować workspace: {e}")),
+                        email,
+                        csrf_token,
+                        tokens,
+                        None,
+                    );
+                }
+            }
+        }
+        RegistrationAuthorization::WorkspaceInvite(invite) => {
+            let invite_info = workspace_invite_message(&state, &invite).await;
+            match apply_workspace_invite(&state, &user, &invite).await {
+                Ok(workspace_id) => workspace_id,
+                Err(e) => {
+                    return render_register_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!("Nie udało się aktywować zaproszenia: {e}")),
+                        email,
+                        csrf_token,
+                        tokens,
+                        Some(invite_info),
+                    );
+                }
+            }
+        }
+        RegistrationAuthorization::ApplicationAccessInvite(invite) => {
+            let invite_info = application_access_invite_message(&state, &invite).await;
+            match apply_application_access_invite(&state, &user, &invite).await {
+                Ok(workspace_id) => workspace_id,
+                Err(e) => {
+                    return render_register_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!("Nie udało się aktywować dostępu do aplikacji: {e}")),
+                        email,
+                        csrf_token,
+                        tokens,
+                        Some(invite_info),
+                    );
+                }
+            }
+        }
+    };
+
+    if let Err(e) = persist_authenticated_session(&session, &user.id, &workspace_id).await {
         return render_register_template(
             StatusCode::INTERNAL_SERVER_ERROR,
             Some(format!("Błąd sesji: {e}")),
@@ -1007,48 +1064,6 @@ pub async fn register(
             tokens,
             None,
         );
-    }
-
-    match authorization {
-        RegistrationAuthorization::BootstrapAdmin => {
-            if let Err(e) = prepare_independent_workspace(&state, &session, &user).await {
-                return render_register_template(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Nie udało się przygotować workspace: {e}")),
-                    email,
-                    csrf_token,
-                    tokens,
-                    None,
-                );
-            }
-        }
-        RegistrationAuthorization::WorkspaceInvite(invite) => {
-            let invite_info = workspace_invite_message(&state, &invite).await;
-            if let Err(e) = apply_workspace_invite(&state, &session, &user, &invite).await {
-                return render_register_template(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Nie udało się aktywować zaproszenia: {e}")),
-                    email,
-                    csrf_token,
-                    tokens,
-                    Some(invite_info),
-                );
-            }
-        }
-        RegistrationAuthorization::ApplicationAccessInvite(invite) => {
-            let invite_info = application_access_invite_message(&state, &invite).await;
-            if let Err(e) = apply_application_access_invite(&state, &session, &user, &invite).await
-            {
-                return render_register_template(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Nie udało się aktywować dostępu do aplikacji: {e}")),
-                    email,
-                    csrf_token,
-                    tokens,
-                    Some(invite_info),
-                );
-            }
-        }
     }
 
     log_audit_action(
@@ -1484,6 +1499,39 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(membership.role, WorkspaceRole::Admin);
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn login_with_invalid_invite_does_not_create_session() {
+        let (state, db_path) = test_state(Vec::new()).await;
+        let user = make_user("existing.user@example.com", "Passw0rd!");
+        state.user_repo.create(&user).await.unwrap();
+        let session = session_with_csrf("csrf").await;
+
+        let response = login(
+            State(state),
+            session.clone(),
+            HeaderMap::new(),
+            CsrfForm(LoginFormData {
+                email: "existing.user@example.com".to_string(),
+                password: "Passw0rd!".to_string(),
+                workspace_invite_token: Some("missing-invite".to_string()),
+                app_access_invite_token: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(session.get::<String>("user_id").await.unwrap().is_none());
+        assert!(
+            session
+                .get::<String>(CURRENT_WORKSPACE_SESSION_KEY)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         let _ = std::fs::remove_file(db_path);
     }

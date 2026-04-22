@@ -77,6 +77,14 @@ impl Config {
         let smtp_password = std::env::var("SMTP_PASSWORD")
             .ok()
             .filter(|v| !v.is_empty());
+        if matches!(smtp_auth, SmtpAuthMode::Required)
+            && (smtp_username.is_none() || smtp_password.is_none())
+        {
+            return Err(
+                "SMTP_USERNAME and SMTP_PASSWORD must be set when SMTP_AUTH=required"
+                    .to_string(),
+            );
+        }
         let smtp_from_email =
             std::env::var("SMTP_FROM_EMAIL").map_err(|_| "SMTP_FROM_EMAIL not set")?;
         let smtp_from_name =
