@@ -1,3 +1,4 @@
+pub mod account_scope;
 pub mod audit;
 pub mod auth;
 pub mod batch;

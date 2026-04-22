@@ -1,18 +1,18 @@
 use async_trait::async_trait;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{Direction, Invoice, InvoiceId, InvoiceStatus};
-use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 
-/// Filter criteria for listing invoices.
+/// Optional filter criteria for listing invoices.
 ///
-/// `account_id` is required — the type system enforces tenant isolation.
-/// Every query must specify which account's invoices to return.
-#[derive(Debug, Clone)]
+/// Does **not** contain an `account_id` — the caller supplies an [`AccountScope`]
+/// as a separate argument to [`InvoiceRepository::list`].  The scope is the sole
+/// proof of authorisation; the filter is purely cosmetic (pagination, direction,
+/// status).
+#[derive(Debug, Clone, Default)]
 pub struct InvoiceFilter {
-    /// Tenant boundary: only invoices belonging to this NIP account.
-    pub account_id: NipAccountId,
     pub direction: Option<Direction>,
     pub status: Option<InvoiceStatus>,
     pub limit: Option<u32>,
@@ -20,16 +20,9 @@ pub struct InvoiceFilter {
 }
 
 impl InvoiceFilter {
-    /// Create a filter scoped to the given NIP account.
     #[must_use]
-    pub fn for_account(account_id: NipAccountId) -> Self {
-        Self {
-            account_id,
-            direction: None,
-            status: None,
-            limit: None,
-            offset: None,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     #[must_use]
@@ -53,27 +46,27 @@ pub trait InvoiceRepository: Send + Sync {
     async fn find_by_id(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Invoice, RepositoryError>;
 
     async fn update_status(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError>;
 
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &str,
     ) -> Result<(), RepositoryError>;
 
     async fn set_ksef_error(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         error: &str,
     ) -> Result<(), RepositoryError>;
 
@@ -93,10 +86,14 @@ pub trait InvoiceRepository: Send + Sync {
     async fn find_by_ksef_number_and_account(
         &self,
         ksef_number: &KSeFNumber,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Option<Invoice>, RepositoryError>;
 
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError>;
 
-    async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError>;
+    async fn list(
+        &self,
+        scope: &AccountScope,
+        filter: &InvoiceFilter,
+    ) -> Result<Vec<Invoice>, RepositoryError>;
 }

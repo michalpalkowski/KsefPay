@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::user::UserId;
@@ -37,10 +38,13 @@ pub trait NipAccountRepository: Send + Sync {
     /// List all NIP accounts accessible by a user.
     async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError>;
 
-    /// Check if a user has access to a specific NIP account.
-    async fn has_access(
+    /// Verify that a user has access to the NIP account identified by `nip`.
+    ///
+    /// Returns `Some((account, scope))` if the user is authorized, `None` otherwise.
+    /// `AccountScope` is the proof-of-authorization token — it can only be produced here.
+    async fn verify_access(
         &self,
         user_id: &UserId,
         nip: &Nip,
-    ) -> Result<Option<NipAccount>, RepositoryError>;
+    ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError>;
 }
