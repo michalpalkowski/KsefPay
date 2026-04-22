@@ -1,9 +1,13 @@
 use ksef_core::domain::environment::KSeFEnvironment;
 
+use crate::email::SmtpEmailConfig;
+
 pub struct Config {
     pub database_url: String,
     pub server_host: String,
     pub server_port: u16,
+    pub app_base_url: String,
+    pub smtp: SmtpEmailConfig,
     pub ksef_environment: KSeFEnvironment,
     pub cert_storage_key: Option<String>,
     pub ksef_cert_pem: Option<String>,
@@ -15,6 +19,10 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self, String> {
         let database_url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL not set")?;
+        let app_base_url = std::env::var("APP_BASE_URL").map_err(|_| "APP_BASE_URL not set")?;
+        if !(app_base_url.starts_with("https://") || app_base_url.starts_with("http://")) {
+            return Err("APP_BASE_URL must start with http:// or https://".to_string());
+        }
 
         let server_host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
 
@@ -38,11 +46,31 @@ impl Config {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
+        let smtp_server = std::env::var("SMTP_HOST").map_err(|_| "SMTP_HOST not set")?;
+        let smtp_port: u16 = std::env::var("SMTP_PORT")
+            .map_err(|_| "SMTP_PORT not set")?
+            .parse()
+            .map_err(|_| "SMTP_PORT must be a valid port number")?;
+        let smtp_username = std::env::var("SMTP_USERNAME").map_err(|_| "SMTP_USERNAME not set")?;
+        let smtp_password = std::env::var("SMTP_PASSWORD").map_err(|_| "SMTP_PASSWORD not set")?;
+        let smtp_from_email =
+            std::env::var("SMTP_FROM_EMAIL").map_err(|_| "SMTP_FROM_EMAIL not set")?;
+        let smtp_from_name =
+            std::env::var("SMTP_FROM_NAME").unwrap_or_else(|_| "KSeF Pay".to_string());
 
         Ok(Self {
             database_url,
             server_host,
             server_port,
+            app_base_url,
+            smtp: SmtpEmailConfig {
+                server: smtp_server,
+                port: smtp_port,
+                username: smtp_username,
+                password: smtp_password,
+                from_email: smtp_from_email,
+                from_name: smtp_from_name,
+            },
             ksef_environment,
             cert_storage_key,
             ksef_cert_pem,

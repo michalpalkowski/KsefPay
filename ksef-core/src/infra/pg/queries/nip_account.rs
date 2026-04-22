@@ -1,9 +1,7 @@
 use sqlx::PgExecutor;
 
-use crate::domain::account_scope::AccountScope;
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
-use crate::domain::user::UserId;
 use crate::error::RepositoryError;
 use crate::infra::crypto::CertificateSecretBox;
 
@@ -12,7 +10,7 @@ fn decode_err(msg: String) -> RepositoryError {
 }
 
 #[derive(sqlx::FromRow)]
-struct NipAccountRow {
+pub(crate) struct NipAccountRow {
     id: uuid::Uuid,
     nip: String,
     display_name: String,
@@ -26,7 +24,7 @@ struct NipAccountRow {
 }
 
 impl NipAccountRow {
-    fn into_domain(
+    pub(crate) fn into_domain(
         self,
         certificate_secret_box: &CertificateSecretBox,
     ) -> Result<NipAccount, RepositoryError> {
@@ -185,110 +183,4 @@ pub async fn update_credentials<'e>(
         });
     }
     Ok(())
-}
-
-pub async fn grant_access<'e>(
-    exec: impl PgExecutor<'e>,
-    user_id: &UserId,
-    account_id: &NipAccountId,
-    can_manage_credentials: bool,
-) -> Result<(), RepositoryError> {
-    sqlx::query(
-        r"INSERT INTO user_nip_access (user_id, nip_account_id, can_manage_credentials)
-          VALUES ($1, $2, $3)
-          ON CONFLICT (user_id, nip_account_id) DO UPDATE
-          SET can_manage_credentials = EXCLUDED.can_manage_credentials",
-    )
-    .bind(user_id.as_uuid())
-    .bind(account_id.as_uuid())
-    .bind(can_manage_credentials)
-    .execute(exec)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-            RepositoryError::Duplicate {
-                entity: "UserNipAccess",
-                key: format!("{}:{}", user_id, account_id),
-            }
-        }
-        _ => RepositoryError::Database(e),
-    })?;
-    Ok(())
-}
-
-pub async fn revoke_access<'e>(
-    exec: impl PgExecutor<'e>,
-    user_id: &UserId,
-    account_id: &NipAccountId,
-) -> Result<(), RepositoryError> {
-    sqlx::query("DELETE FROM user_nip_access WHERE user_id = $1 AND nip_account_id = $2")
-        .bind(user_id.as_uuid())
-        .bind(account_id.as_uuid())
-        .execute(exec)
-        .await?;
-    Ok(())
-}
-
-pub async fn list_by_user<'e>(
-    exec: impl PgExecutor<'e>,
-    user_id: &UserId,
-    certificate_secret_box: &CertificateSecretBox,
-) -> Result<Vec<NipAccount>, RepositoryError> {
-    let rows: Vec<NipAccountRow> = sqlx::query_as(
-        r"SELECT na.*
-        FROM nip_accounts na
-        INNER JOIN user_nip_access una ON una.nip_account_id = na.id
-        WHERE una.user_id = $1
-        ORDER BY na.created_at DESC",
-    )
-    .bind(user_id.as_uuid())
-    .fetch_all(exec)
-    .await?;
-
-    rows.into_iter()
-        .map(|row| row.into_domain(certificate_secret_box))
-        .collect()
-}
-
-pub async fn verify_access<'e>(
-    exec: impl PgExecutor<'e>,
-    user_id: &UserId,
-    nip: &Nip,
-    certificate_secret_box: &CertificateSecretBox,
-) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
-    let row: Option<NipAccountRow> = sqlx::query_as(
-        r"SELECT na.*
-        FROM nip_accounts na
-        INNER JOIN user_nip_access una ON una.nip_account_id = na.id
-        WHERE una.user_id = $1 AND na.nip = $2",
-    )
-    .bind(user_id.as_uuid())
-    .bind(nip.as_str())
-    .fetch_optional(exec)
-    .await?;
-
-    row.map(|r| {
-        let account = r.into_domain(certificate_secret_box)?;
-        let scope = AccountScope::new(account.id.clone(), account.nip.clone());
-        Ok((account, scope))
-    })
-    .transpose()
-}
-
-pub async fn can_manage_credentials<'e>(
-    exec: impl PgExecutor<'e>,
-    user_id: &UserId,
-    account_id: &NipAccountId,
-) -> Result<bool, RepositoryError> {
-    let allowed = sqlx::query_scalar::<_, Option<bool>>(
-        "SELECT can_manage_credentials FROM user_nip_access WHERE user_id = $1 AND nip_account_id = $2",
-    )
-    .bind(user_id.as_uuid())
-    .bind(account_id.as_uuid())
-    .fetch_optional(exec)
-    .await?
-    .flatten()
-    .unwrap_or(false);
-
-    Ok(allowed)
 }

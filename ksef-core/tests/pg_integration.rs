@@ -23,6 +23,7 @@ use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use ksef_core::domain::session::{KSeFNumber, SessionReference};
 use ksef_core::domain::user::{User, UserId};
+use ksef_core::domain::workspace::{WorkspaceInvite, WorkspaceInviteId, WorkspaceRole};
 use ksef_core::error::RepositoryError;
 use ksef_core::infra::pg::{Db, run_migrations};
 use ksef_core::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -30,6 +31,7 @@ use ksef_core::ports::job_queue::JobQueue;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use ksef_core::ports::user_repository::UserRepository;
+use ksef_core::ports::workspace_repository::WorkspaceRepository;
 use ksef_core::test_support::fixtures::make_scope;
 
 // ---------------------------------------------------------------------------
@@ -1117,147 +1119,186 @@ async fn nip_account_update_credentials() {
 }
 
 // ===========================================================================
-// User <-> NIP Account access control
+// Workspace-scoped NIP access
 // ===========================================================================
 
+async fn ensure_default_workspace(
+    db: &Db,
+    user: &User,
+) -> ksef_core::domain::workspace::WorkspaceSummary {
+    WorkspaceRepository::ensure_default_workspace(db, &user.id, &user.email)
+        .await
+        .unwrap()
+}
+
+async fn attach_workspace_account(
+    db: &Db,
+    workspace_id: &ksef_core::domain::workspace::WorkspaceId,
+    attached_by: &UserId,
+    account_id: &NipAccountId,
+) {
+    WorkspaceRepository::attach_nip(
+        db,
+        workspace_id,
+        account_id,
+        ksef_core::domain::workspace::WorkspaceNipOwnership::WorkspaceOwned,
+        attached_by,
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
-async fn access_grant_and_list_by_user() {
+async fn workspace_lists_accounts_for_active_member() {
     let pool = isolated_pool().await;
     let db = Db::new(pool);
 
     let user = make_user("owner@x.pl");
-    let user_id = UserRepository::create(&db, &user).await.unwrap();
+    UserRepository::create(&db, &user).await.unwrap();
+    let workspace = ensure_default_workspace(&db, &user).await;
 
     let acc1 = make_nip_account(&test_nip());
     let acc1_id = NipAccountRepository::create(&db, &acc1).await.unwrap();
     let acc2 = make_nip_account(&other_nip());
     let acc2_id = NipAccountRepository::create(&db, &acc2).await.unwrap();
 
-    db.grant_access(&user_id, &acc1_id, true).await.unwrap();
-    db.grant_access(&user_id, &acc2_id, true).await.unwrap();
+    attach_workspace_account(&db, &workspace.workspace.id, &user.id, &acc1_id).await;
+    attach_workspace_account(&db, &workspace.workspace.id, &user.id, &acc2_id).await;
 
-    let accounts = db.list_by_user(&user_id).await.unwrap();
+    let accounts =
+        WorkspaceRepository::list_nip_accounts_for_user(&db, &workspace.workspace.id, &user.id)
+            .await
+            .unwrap();
     assert_eq!(accounts.len(), 2);
 }
 
 #[tokio::test]
-async fn access_has_access_returns_account_when_granted() {
+async fn workspace_lookup_returns_account_for_member() {
     let pool = isolated_pool().await;
     let db = Db::new(pool);
 
     let user = make_user("u@x.pl");
-    let user_id = UserRepository::create(&db, &user).await.unwrap();
+    UserRepository::create(&db, &user).await.unwrap();
+    let workspace = ensure_default_workspace(&db, &user).await;
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
-    db.grant_access(&user_id, &acc_id, true).await.unwrap();
+    attach_workspace_account(&db, &workspace.workspace.id, &user.id, &acc_id).await;
 
-    let result = db.verify_access(&user_id, &test_nip()).await.unwrap();
+    let result = WorkspaceRepository::find_user_account_in_workspace(
+        &db,
+        &workspace.workspace.id,
+        &user.id,
+        &test_nip(),
+    )
+    .await
+    .unwrap();
     assert!(result.is_some());
 }
 
 #[tokio::test]
-async fn access_has_access_returns_none_when_not_granted() {
+async fn workspace_lookup_returns_none_when_nip_not_attached() {
     let pool = isolated_pool().await;
     let db = Db::new(pool);
 
     let user = make_user("u@x.pl");
-    let user_id = UserRepository::create(&db, &user).await.unwrap();
+    UserRepository::create(&db, &user).await.unwrap();
+    let workspace = ensure_default_workspace(&db, &user).await;
     NipAccountRepository::create(&db, &make_nip_account(&test_nip()))
         .await
         .unwrap();
 
-    let result = db.verify_access(&user_id, &test_nip()).await.unwrap();
+    let result = WorkspaceRepository::find_user_account_in_workspace(
+        &db,
+        &workspace.workspace.id,
+        &user.id,
+        &test_nip(),
+    )
+    .await
+    .unwrap();
     assert!(result.is_none());
 }
 
 #[tokio::test]
-async fn access_revoke_removes_access() {
-    let pool = isolated_pool().await;
-    let db = Db::new(pool);
-
-    let user = make_user("u@x.pl");
-    let user_id = UserRepository::create(&db, &user).await.unwrap();
-    let acc = make_nip_account(&test_nip());
-    let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
-    db.grant_access(&user_id, &acc_id, true).await.unwrap();
-
-    assert!(
-        db.verify_access(&user_id, &test_nip())
-            .await
-            .unwrap()
-            .is_some()
-    );
-    db.revoke_access(&user_id, &acc_id).await.unwrap();
-    assert!(
-        db.verify_access(&user_id, &test_nip())
-            .await
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn access_isolation_between_users() {
+async fn workspace_isolation_between_users_is_enforced() {
     let pool = isolated_pool().await;
     let db = Db::new(pool);
 
     let alice = make_user("alice@x.pl");
-    let alice_id = UserRepository::create(&db, &alice).await.unwrap();
+    UserRepository::create(&db, &alice).await.unwrap();
     let bob = make_user("bob@x.pl");
-    let bob_id = UserRepository::create(&db, &bob).await.unwrap();
+    UserRepository::create(&db, &bob).await.unwrap();
+
+    let alice_workspace = ensure_default_workspace(&db, &alice).await;
+    let bob_workspace = ensure_default_workspace(&db, &bob).await;
 
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
-    db.grant_access(&alice_id, &acc_id, true).await.unwrap();
+    attach_workspace_account(&db, &alice_workspace.workspace.id, &alice.id, &acc_id).await;
 
     assert!(
-        db.verify_access(&alice_id, &test_nip())
-            .await
-            .unwrap()
-            .is_some()
+        WorkspaceRepository::find_user_account_in_workspace(
+            &db,
+            &alice_workspace.workspace.id,
+            &alice.id,
+            &test_nip(),
+        )
+        .await
+        .unwrap()
+        .is_some()
     );
     assert!(
-        db.verify_access(&bob_id, &test_nip())
-            .await
-            .unwrap()
-            .is_none()
+        WorkspaceRepository::find_user_account_in_workspace(
+            &db,
+            &bob_workspace.workspace.id,
+            &bob.id,
+            &test_nip(),
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
 }
 
 #[tokio::test]
-async fn access_can_disable_credential_management_per_user() {
+async fn workspace_role_controls_credential_management() {
     let pool = isolated_pool().await;
     let db = Db::new(pool);
 
     let owner = make_user("owner@x.pl");
-    let owner_id = UserRepository::create(&db, &owner).await.unwrap();
+    UserRepository::create(&db, &owner).await.unwrap();
     let operator = make_user("operator@x.pl");
-    let operator_id = UserRepository::create(&db, &operator).await.unwrap();
+    UserRepository::create(&db, &operator).await.unwrap();
+
+    let workspace = ensure_default_workspace(&db, &owner).await;
+    WorkspaceRepository::add_member(&db, &workspace.workspace.id, &operator.id, WorkspaceRole::Operator)
+        .await
+        .unwrap();
 
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
+    attach_workspace_account(&db, &workspace.workspace.id, &owner.id, &acc_id).await;
 
-    db.grant_access(&owner_id, &acc_id, true).await.unwrap();
-    db.grant_access(&operator_id, &acc_id, false).await.unwrap();
+    let (_, _, owner_membership) = WorkspaceRepository::find_user_account_in_workspace(
+        &db,
+        &workspace.workspace.id,
+        &owner.id,
+        &test_nip(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (_, _, operator_membership) = WorkspaceRepository::find_user_account_in_workspace(
+        &db,
+        &workspace.workspace.id,
+        &operator.id,
+        &test_nip(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
 
-    assert!(
-        db.verify_access(&owner_id, &test_nip())
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        db.verify_access(&operator_id, &test_nip())
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(db.can_manage_credentials(&owner_id, &acc_id).await.unwrap());
-    assert!(
-        !db.can_manage_credentials(&operator_id, &acc_id)
-            .await
-            .unwrap()
-    );
+    assert!(owner_membership.can_manage_credentials);
+    assert!(!operator_membership.can_manage_credentials);
 }
 
 // ===========================================================================
@@ -1371,4 +1412,195 @@ async fn find_by_id_wrong_account_returns_not_found() {
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn workspace_members_can_share_single_workspace_account() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let owner = make_user("owner@workspace.pl");
+    let owner_id = UserRepository::create(&db, &owner).await.unwrap();
+    let operator = make_user("operator@workspace.pl");
+    let operator_id = UserRepository::create(&db, &operator).await.unwrap();
+
+    let workspace = WorkspaceRepository::ensure_default_workspace(&db, &owner_id, &owner.email)
+        .await
+        .unwrap();
+    WorkspaceRepository::add_member(
+        &db,
+        &workspace.workspace.id,
+        &operator_id,
+        WorkspaceRole::Operator,
+    )
+    .await
+    .unwrap();
+
+    let account = make_nip_account(&test_nip());
+    let account_id = NipAccountRepository::create(&db, &account).await.unwrap();
+    WorkspaceRepository::attach_nip(
+        &db,
+        &workspace.workspace.id,
+        &account_id,
+        ksef_core::domain::workspace::WorkspaceNipOwnership::WorkspaceOwned,
+        &owner_id,
+    )
+    .await
+    .unwrap();
+    let owner_workspaces = WorkspaceRepository::list_for_user(&db, &owner_id)
+        .await
+        .unwrap();
+    let operator_workspaces = WorkspaceRepository::list_for_user(&db, &operator_id)
+        .await
+        .unwrap();
+
+    assert_eq!(owner_workspaces.len(), 1);
+    assert_eq!(operator_workspaces.len(), 1);
+    assert_eq!(
+        owner_workspaces[0].workspace.id,
+        operator_workspaces[0].workspace.id
+    );
+    assert_eq!(owner_workspaces[0].membership.role, WorkspaceRole::Owner);
+    assert_eq!(
+        operator_workspaces[0].membership.role,
+        WorkspaceRole::Operator
+    );
+
+    let owner_accounts = WorkspaceRepository::list_nip_accounts_for_user(
+        &db,
+        &owner_workspaces[0].workspace.id,
+        &owner_id,
+    )
+    .await
+    .unwrap();
+    let operator_accounts = WorkspaceRepository::list_nip_accounts_for_user(
+        &db,
+        &operator_workspaces[0].workspace.id,
+        &operator_id,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(owner_accounts.len(), 1);
+    assert_eq!(operator_accounts.len(), 1);
+    assert_eq!(owner_accounts[0].nip, test_nip());
+    assert_eq!(operator_accounts[0].nip, test_nip());
+}
+
+#[tokio::test]
+async fn workspace_lookup_is_scoped_to_active_workspace() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let owner = make_user("owner@scope.pl");
+    let owner_id = UserRepository::create(&db, &owner).await.unwrap();
+    let outsider = make_user("outsider@scope.pl");
+    let outsider_id = UserRepository::create(&db, &outsider).await.unwrap();
+
+    let owner_workspace =
+        WorkspaceRepository::ensure_default_workspace(&db, &owner_id, &owner.email)
+            .await
+            .unwrap();
+    let account = make_nip_account(&test_nip());
+    let account_id = NipAccountRepository::create(&db, &account).await.unwrap();
+    WorkspaceRepository::attach_nip(
+        &db,
+        &owner_workspace.workspace.id,
+        &account_id,
+        ksef_core::domain::workspace::WorkspaceNipOwnership::WorkspaceOwned,
+        &owner_id,
+    )
+    .await
+    .unwrap();
+    let outsider_workspace =
+        WorkspaceRepository::ensure_default_workspace(&db, &outsider_id, &outsider.email)
+            .await
+            .unwrap();
+
+    assert!(
+        WorkspaceRepository::find_user_account_in_workspace(
+            &db,
+            &owner_workspace.workspace.id,
+            &owner_id,
+            &test_nip(),
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        WorkspaceRepository::find_user_account_in_workspace(
+            &db,
+            &outsider_workspace.workspace.id,
+            &outsider_id,
+            &test_nip(),
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[tokio::test]
+async fn workspace_invite_lifecycle_is_persisted() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let owner = make_user("owner@invite.pl");
+    let owner_id = UserRepository::create(&db, &owner).await.unwrap();
+    let workspace = WorkspaceRepository::ensure_default_workspace(&db, &owner_id, &owner.email)
+        .await
+        .unwrap();
+
+    let invite = WorkspaceInvite {
+        id: WorkspaceInviteId::new(),
+        workspace_id: workspace.workspace.id.clone(),
+        email: "new.member@example.com".to_string(),
+        role: WorkspaceRole::Operator,
+        token_hash: "invite-token-hash".to_string(),
+        expires_at: Utc::now() + chrono::Duration::days(3),
+        accepted_at: None,
+        revoked_at: None,
+        created_by_user_id: owner_id.clone(),
+        created_at: Utc::now(),
+    };
+
+    WorkspaceRepository::create_invite(&db, &invite)
+        .await
+        .unwrap();
+    let pending = WorkspaceRepository::list_pending_invites(&db, &workspace.workspace.id)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].role, WorkspaceRole::Operator);
+
+    let loaded = WorkspaceRepository::find_invite_by_token_hash(&db, &invite.token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.email, invite.email);
+
+    WorkspaceRepository::accept_invite(&db, &invite.id)
+        .await
+        .unwrap();
+    let accepted = WorkspaceRepository::find_invite_by_token_hash(&db, &invite.token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(accepted.accepted_at.is_some());
+
+    WorkspaceRepository::revoke_invite(&db, &invite.id)
+        .await
+        .unwrap();
+    let revoked = WorkspaceRepository::find_invite_by_token_hash(&db, &invite.token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(revoked.revoked_at.is_some());
+    assert!(
+        WorkspaceRepository::list_pending_invites(&db, &workspace.workspace.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -16,6 +16,7 @@ use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::session_repository::SessionRepository;
 use ksef_core::ports::transaction::AtomicScopeFactory;
 use ksef_core::ports::user_repository::UserRepository;
+use ksef_core::ports::workspace_repository::WorkspaceRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub struct DatabasePorts {
     pub invoice_sequence: Arc<dyn InvoiceSequenceRepository>,
     pub audit_log_repo: Arc<dyn AuditLogRepository>,
     pub local_token_repo: Arc<dyn LocalTokenRepository>,
+    pub workspace_repo: Arc<dyn WorkspaceRepository>,
 }
 
 pub fn detect_backend_kind(database_url: &str) -> anyhow::Result<DatabaseBackendKind> {
@@ -119,7 +121,6 @@ async fn connect_postgres(
         pool,
         certificate_secret_box,
     ));
-
     let invoice_repo: Arc<dyn InvoiceRepository> = db.clone();
     let job_queue: Arc<dyn JobQueue> = db.clone();
     let session_repo: Arc<dyn SessionRepository> = db.clone();
@@ -129,6 +130,7 @@ async fn connect_postgres(
     let invoice_sequence: Arc<dyn InvoiceSequenceRepository> = db.clone();
     let audit_log_repo: Arc<dyn AuditLogRepository> = db.clone();
     let local_token_repo: Arc<dyn LocalTokenRepository> = db.clone();
+    let workspace_repo: Arc<dyn WorkspaceRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -143,6 +145,7 @@ async fn connect_postgres(
         invoice_sequence,
         audit_log_repo,
         local_token_repo,
+        workspace_repo,
     })
 }
 
@@ -176,7 +179,6 @@ async fn connect_sqlite(
         pool,
         certificate_secret_box,
     ));
-
     let invoice_repo: Arc<dyn InvoiceRepository> = db.clone();
     let job_queue: Arc<dyn JobQueue> = db.clone();
     let session_repo: Arc<dyn SessionRepository> = db.clone();
@@ -186,6 +188,7 @@ async fn connect_sqlite(
     let invoice_sequence: Arc<dyn InvoiceSequenceRepository> = db.clone();
     let audit_log_repo: Arc<dyn AuditLogRepository> = db.clone();
     let local_token_repo: Arc<dyn LocalTokenRepository> = db.clone();
+    let workspace_repo: Arc<dyn WorkspaceRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -200,6 +203,7 @@ async fn connect_sqlite(
         invoice_sequence,
         audit_log_repo,
         local_token_repo,
+        workspace_repo,
     })
 }
 

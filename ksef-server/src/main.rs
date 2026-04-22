@@ -37,10 +37,12 @@ mod auth_rate_limit;
 mod config;
 mod csrf;
 mod db_backend;
+mod email;
 mod extractors;
 mod request_meta;
 mod routes;
 mod state;
+mod workspace_invites;
 
 use state::AppState;
 
@@ -170,6 +172,8 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let qr_service = Arc::new(QRService::new(config.ksef_environment, qr_renderer.clone()));
+    let email_sender: email::SharedEmailSender =
+        Arc::new(email::SmtpEmailSender::new(&config.smtp).map_err(anyhow::Error::msg)?);
 
     let offline_service = Arc::new(OfflineService::new(
         QRService::new(config.ksef_environment, qr_renderer),
@@ -200,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         fetch_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         auth_rate_limiter: auth_rate_limit::AuthRateLimiter::default(),
+        public_base_url: config.app_base_url,
         allowed_emails: config.allowed_emails,
         company_lookup_service,
         invoice_sequence: db.invoice_sequence.clone(),
@@ -210,6 +215,8 @@ async fn main() -> anyhow::Result<()> {
         permission_service,
         token_mgmt_service,
         local_token_repo: db.local_token_repo.clone(),
+        workspace_repo: db.workspace_repo.clone(),
+        email_sender,
         export_service,
         offline_service,
         qr_service,

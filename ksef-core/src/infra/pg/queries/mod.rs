@@ -7,3 +7,4 @@ pub mod local_token;
 pub mod nip_account;
 pub mod session;
 pub mod user;
+pub mod workspace;

@@ -21,4 +21,5 @@ pub mod rate_limit;
 pub mod session;
 pub mod token_mgmt;
 pub mod user;
+pub mod workspace;
 pub mod xml;

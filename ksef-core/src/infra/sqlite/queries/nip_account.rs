@@ -1,10 +1,8 @@
 use sqlx::SqliteExecutor;
 
 use super::datetime::parse_sqlite_datetime;
-use crate::domain::account_scope::AccountScope;
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
-use crate::domain::user::UserId;
 use crate::error::RepositoryError;
 use crate::infra::crypto::CertificateSecretBox;
 
@@ -199,117 +197,4 @@ pub async fn update_credentials<'e>(
         });
     }
     Ok(())
-}
-
-pub async fn grant_access<'e>(
-    exec: impl SqliteExecutor<'e>,
-    user_id: &UserId,
-    account_id: &NipAccountId,
-    can_manage_credentials: bool,
-) -> Result<(), RepositoryError> {
-    sqlx::query(
-        r"INSERT INTO user_nip_access (user_id, nip_account_id, can_manage_credentials)
-          VALUES (?1, ?2, ?3)
-          ON CONFLICT(user_id, nip_account_id) DO UPDATE SET
-            can_manage_credentials = excluded.can_manage_credentials",
-    )
-    .bind(user_id.to_string())
-    .bind(account_id.to_string())
-    .bind(i32::from(can_manage_credentials))
-    .execute(exec)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-            RepositoryError::Duplicate {
-                entity: "UserNipAccess",
-                key: format!("{}:{}", user_id, account_id),
-            }
-        }
-        _ => RepositoryError::Database(e),
-    })?;
-
-    Ok(())
-}
-
-pub async fn revoke_access<'e>(
-    exec: impl SqliteExecutor<'e>,
-    user_id: &UserId,
-    account_id: &NipAccountId,
-) -> Result<(), RepositoryError> {
-    let result =
-        sqlx::query(r"DELETE FROM user_nip_access WHERE user_id = ?1 AND nip_account_id = ?2")
-            .bind(user_id.to_string())
-            .bind(account_id.to_string())
-            .execute(exec)
-            .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(RepositoryError::NotFound {
-            entity: "UserNipAccess",
-            id: format!("{}:{}", user_id, account_id),
-        });
-    }
-    Ok(())
-}
-
-pub async fn list_by_user<'e>(
-    exec: impl SqliteExecutor<'e>,
-    user_id: &UserId,
-    certificate_secret_box: &CertificateSecretBox,
-) -> Result<Vec<NipAccount>, RepositoryError> {
-    let rows: Vec<NipAccountRow> = sqlx::query_as(
-        r"SELECT na.* FROM nip_accounts na
-           INNER JOIN user_nip_access una ON una.nip_account_id = na.id
-           WHERE una.user_id = ?1
-           ORDER BY na.display_name",
-    )
-    .bind(user_id.to_string())
-    .fetch_all(exec)
-    .await?;
-
-    rows.into_iter()
-        .map(|row| row.into_domain(certificate_secret_box))
-        .collect()
-}
-
-pub async fn verify_access<'e>(
-    exec: impl SqliteExecutor<'e>,
-    user_id: &UserId,
-    nip: &Nip,
-    certificate_secret_box: &CertificateSecretBox,
-) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
-    let row: Option<NipAccountRow> = sqlx::query_as(
-        r"SELECT na.* FROM nip_accounts na
-           INNER JOIN user_nip_access una ON una.nip_account_id = na.id
-           WHERE una.user_id = ?1 AND na.nip = ?2",
-    )
-    .bind(user_id.to_string())
-    .bind(nip.as_str())
-    .fetch_optional(exec)
-    .await?;
-
-    row.map(|r| {
-        let account = r.into_domain(certificate_secret_box)?;
-        let scope = AccountScope::new(account.id.clone(), account.nip.clone());
-        Ok((account, scope))
-    })
-    .transpose()
-}
-
-pub async fn can_manage_credentials<'e>(
-    exec: impl SqliteExecutor<'e>,
-    user_id: &UserId,
-    account_id: &NipAccountId,
-) -> Result<bool, RepositoryError> {
-    let allowed = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT can_manage_credentials FROM user_nip_access WHERE user_id = ?1 AND nip_account_id = ?2",
-    )
-    .bind(user_id.to_string())
-    .bind(account_id.to_string())
-    .fetch_optional(exec)
-    .await?
-    .flatten()
-    .unwrap_or(0);
-
-    Ok(allowed != 0)
 }

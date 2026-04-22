@@ -14,13 +14,14 @@ use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use ksef_core::domain::session::{InvoiceQuery, SubjectType};
+use ksef_core::domain::workspace::{WorkspaceNipOwnership, WorkspaceSummary};
 use ksef_core::infra::ksef::testdata::TestSubjectType;
 use ksef_core::infra::ksef::{KSeFApiClient, TestDataClient};
 use ksef_core::ports::ksef_client::KSeFClient;
 
 use crate::audit_log;
 use crate::csrf::{CSRF_SESSION_KEY, ensure_csrf_token};
-use crate::extractors::{AuthUser, CsrfForm};
+use crate::extractors::{CsrfForm, WorkspaceContext};
 use crate::request_meta::client_ip;
 use crate::state::AppState;
 
@@ -32,6 +33,9 @@ struct AccountsTemplate {
     active: &'static str,
     nip_prefix: Option<String>,
     user_email: String,
+    current_workspace_name: String,
+    workspaces: Vec<WorkspaceOptionTemplate>,
+    csrf_token: String,
     accounts: Vec<NipAccount>,
 }
 
@@ -41,10 +45,19 @@ struct AccountAddTemplate {
     active: &'static str,
     nip_prefix: Option<String>,
     user_email: String,
+    current_workspace_name: String,
     error: Option<String>,
     nip: String,
     display_name: String,
     csrf_token: String,
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceOptionTemplate {
+    id: String,
+    display_name: String,
+    role_label: &'static str,
+    is_current: bool,
 }
 
 #[derive(Template)]
@@ -85,6 +98,45 @@ fn render_with_status<T: Template>(status: StatusCode, tmpl: T) -> Response {
         )
             .into_response(),
     }
+}
+
+fn workspace_options(
+    workspaces: &[WorkspaceSummary],
+    current_workspace_id: &str,
+) -> Vec<WorkspaceOptionTemplate> {
+    workspaces
+        .iter()
+        .map(|summary| WorkspaceOptionTemplate {
+            id: summary.workspace.id.to_string(),
+            display_name: summary.workspace.display_name.clone(),
+            role_label: summary.membership.role.display_name(),
+            is_current: summary.workspace.id.to_string() == current_workspace_id,
+        })
+        .collect()
+}
+
+fn render_account_add_page(
+    status: StatusCode,
+    user_email: String,
+    current_workspace_name: String,
+    error: Option<String>,
+    nip: String,
+    display_name: String,
+    csrf_token: String,
+) -> Response {
+    render_with_status(
+        status,
+        AccountAddTemplate {
+            active: "/accounts",
+            nip_prefix: None,
+            user_email,
+            current_workspace_name,
+            error,
+            nip,
+            display_name,
+            csrf_token,
+        },
+    )
 }
 
 fn build_certificate_template(
@@ -418,8 +470,30 @@ async fn bootstrap_sandbox_subject(
 
 // --- Handlers ---
 
-pub async fn list(State(state): State<AppState>, auth: AuthUser) -> Response {
-    let accounts = match state.nip_account_repo.list_by_user(&auth.id).await {
+pub async fn list(
+    State(state): State<AppState>,
+    workspace_ctx: WorkspaceContext,
+    session: Session,
+) -> Response {
+    let workspaces = match state
+        .workspace_repo
+        .list_for_user(&workspace_ctx.user.id)
+        .await
+    {
+        Ok(workspaces) => workspaces,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Nie udało się pobrać listy workspace: {e}"),
+            )
+                .into_response();
+        }
+    };
+    let accounts = match state
+        .workspace_repo
+        .list_nip_accounts_for_user(&workspace_ctx.workspace.id, &workspace_ctx.user.id)
+        .await
+    {
         Ok(a) => a,
         Err(e) => {
             return (
@@ -429,21 +503,26 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> Response {
                 .into_response();
         }
     };
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
 
     render(AccountsTemplate {
         active: "/accounts",
         nip_prefix: None,
-        user_email: auth.email,
+        user_email: workspace_ctx.user.email,
+        current_workspace_name: workspace_ctx.workspace.display_name.clone(),
+        workspaces: workspace_options(&workspaces, &workspace_ctx.workspace.id.to_string()),
+        csrf_token,
         accounts,
     })
 }
 
-pub async fn add_form(auth: AuthUser, session: Session) -> Response {
+pub async fn add_form(workspace_ctx: WorkspaceContext, session: Session) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     render(AccountAddTemplate {
         active: "/accounts",
         nip_prefix: None,
-        user_email: auth.email,
+        user_email: workspace_ctx.user.email,
+        current_workspace_name: workspace_ctx.workspace.display_name,
         error: None,
         nip: String::new(),
         display_name: String::new(),
@@ -453,104 +532,111 @@ pub async fn add_form(auth: AuthUser, session: Session) -> Response {
 
 pub async fn add(
     State(state): State<AppState>,
-    auth: AuthUser,
+    workspace_ctx: WorkspaceContext,
     session: Session,
     CsrfForm(form): CsrfForm<AddAccountFormData>,
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     let form_nip = form.nip.clone();
     let form_display_name = form.display_name.clone();
+    let user_email = workspace_ctx.user.email.clone();
+    let current_workspace_name = workspace_ctx.workspace.display_name.clone();
+
+    if !workspace_ctx.membership.can_manage_nips {
+        return render_account_add_page(
+            StatusCode::FORBIDDEN,
+            user_email,
+            current_workspace_name,
+            Some("Twoja rola w tym workspace nie pozwala dodawać kont NIP.".to_string()),
+            form_nip,
+            form_display_name,
+            csrf_token,
+        );
+    }
 
     let nip = match Nip::parse(&form.nip) {
         Ok(n) => n,
         Err(e) => {
-            return render_with_status(
+            return render_account_add_page(
                 StatusCode::BAD_REQUEST,
-                AccountAddTemplate {
-                    active: "/accounts",
-                    nip_prefix: None,
-                    user_email: auth.email,
-                    error: Some(format!("Nieprawidłowy NIP: {e}")),
-                    nip: form_nip,
-                    display_name: form_display_name,
-                    csrf_token,
-                },
+                user_email.clone(),
+                current_workspace_name.clone(),
+                Some(format!("Nieprawidłowy NIP: {e}")),
+                form_nip,
+                form_display_name,
+                csrf_token,
             );
         }
     };
 
     let display_name = form.display_name.trim().to_string();
     if display_name.is_empty() {
-        return render_with_status(
+        return render_account_add_page(
             StatusCode::BAD_REQUEST,
-            AccountAddTemplate {
-                active: "/accounts",
-                nip_prefix: None,
-                user_email: auth.email,
-                error: Some("Nazwa wyswietlana jest wymagana".to_string()),
-                nip: form_nip,
-                display_name: form_display_name,
-                csrf_token,
-            },
+            user_email.clone(),
+            current_workspace_name.clone(),
+            Some("Nazwa wyswietlana jest wymagana".to_string()),
+            form_nip,
+            form_display_name,
+            csrf_token,
         );
     }
 
     // Check if NIP account already exists
     match state.nip_account_repo.find_by_nip(&nip).await {
         Ok(Some(existing)) => {
-            let already_linked = match state.nip_account_repo.verify_access(&auth.id, &nip).await {
+            let already_linked = match state
+                .workspace_repo
+                .find_user_account_in_workspace(
+                    &workspace_ctx.workspace.id,
+                    &workspace_ctx.user.id,
+                    &nip,
+                )
+                .await
+            {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(e) => {
-                    return render_with_status(
+                    return render_account_add_page(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        AccountAddTemplate {
-                            active: "/accounts",
-                            nip_prefix: None,
-                            user_email: auth.email,
-                            error: Some(format!("Błąd serwera: {e}")),
-                            nip: form_nip,
-                            display_name: form_display_name,
-                            csrf_token,
-                        },
+                        user_email.clone(),
+                        current_workspace_name.clone(),
+                        Some(format!("Błąd serwera: {e}")),
+                        form_nip,
+                        form_display_name,
+                        csrf_token,
                     );
                 }
             };
 
             if !already_linked {
-                return render_with_status(
-                    StatusCode::FORBIDDEN,
-                    AccountAddTemplate {
-                        active: "/accounts",
-                        nip_prefix: None,
-                        user_email: auth.email,
-                        error: Some(format!(
-                            "NIP {} jest już zapisany w aplikacji. Certyfikat i dostęp są prowadzone per NIP, więc istniejącego konta nie da się samodzielnie dopiąć do innego użytkownika.",
-                            existing.nip
-                        )),
-                        nip: form_nip,
-                        display_name: form_display_name,
-                        csrf_token,
-                    },
+                return render_account_add_page(
+                    StatusCode::CONFLICT,
+                    user_email.clone(),
+                    current_workspace_name.clone(),
+                    Some(format!(
+                        "NIP {} jest już zapisany w innym workspace. Model SaaS jest per workspace, więc istniejącego konta nie da się dopiąć do drugiego workspace bez jawnego transferu.",
+                        existing.nip
+                    )),
+                    form_nip,
+                    form_display_name,
+                    csrf_token,
                 );
             }
 
             if state.ksef_environment != KSeFEnvironment::Production
                 && let Err(e) = bootstrap_sandbox_subject(&state, &existing.nip, false).await
             {
-                return render_with_status(
+                return render_account_add_page(
                     StatusCode::BAD_GATEWAY,
-                    AccountAddTemplate {
-                        active: "/accounts",
-                        nip_prefix: None,
-                        user_email: auth.email,
-                        error: Some(format!(
-                            "Konto NIP istnieje, ale nie ma wymaganych uprawnień KSeF sandbox: {e}"
-                        )),
-                        nip: form_nip,
-                        display_name: form_display_name,
-                        csrf_token,
-                    },
+                    user_email.clone(),
+                    current_workspace_name.clone(),
+                    Some(format!(
+                        "Konto NIP istnieje, ale nie ma wymaganych uprawnień KSeF sandbox: {e}"
+                    )),
+                    form_nip,
+                    form_display_name,
+                    csrf_token,
                 );
             }
             return Redirect::to("/accounts").into_response();
@@ -559,19 +645,16 @@ pub async fn add(
             if state.ksef_environment != KSeFEnvironment::Production
                 && let Err(e) = bootstrap_sandbox_subject(&state, &nip, true).await
             {
-                return render_with_status(
+                return render_account_add_page(
                     StatusCode::BAD_GATEWAY,
-                    AccountAddTemplate {
-                        active: "/accounts",
-                        nip_prefix: None,
-                        user_email: auth.email,
-                        error: Some(format!(
-                            "Nie udało się skonfigurować konta w KSeF sandbox: {e}"
-                        )),
-                        nip: form_nip,
-                        display_name: form_display_name,
-                        csrf_token,
-                    },
+                    user_email.clone(),
+                    current_workspace_name.clone(),
+                    Some(format!(
+                        "Nie udało się skonfigurować konta w KSeF sandbox: {e}"
+                    )),
+                    form_nip,
+                    form_display_name,
+                    csrf_token,
                 );
             }
 
@@ -590,53 +673,49 @@ pub async fn add(
                 updated_at: now,
             };
             if let Err(e) = state.nip_account_repo.create(&account).await {
-                return render_with_status(
+                return render_account_add_page(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    AccountAddTemplate {
-                        active: "/accounts",
-                        nip_prefix: None,
-                        user_email: auth.email,
-                        error: Some(format!("Nie udało się utworzyć konta NIP: {e}")),
-                        nip: form_nip,
-                        display_name: form_display_name,
-                        csrf_token,
-                    },
+                    user_email.clone(),
+                    current_workspace_name.clone(),
+                    Some(format!("Nie udało się utworzyć konta NIP: {e}")),
+                    form_nip,
+                    form_display_name,
+                    csrf_token,
                 );
             }
             if let Err(e) = state
-                .nip_account_repo
-                .grant_access(&auth.id, &account.id, true)
+                .workspace_repo
+                .attach_nip(
+                    &workspace_ctx.workspace.id,
+                    &account.id,
+                    WorkspaceNipOwnership::WorkspaceOwned,
+                    &workspace_ctx.user.id,
+                )
                 .await
             {
-                return render_with_status(
+                return render_account_add_page(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    AccountAddTemplate {
-                        active: "/accounts",
-                        nip_prefix: None,
-                        user_email: auth.email,
-                        error: Some(format!(
-                            "Konto NIP utworzono, ale nie udało się przypisać właściciela konta: {e}"
-                        )),
-                        nip: form_nip,
-                        display_name: form_display_name,
-                        csrf_token,
-                    },
+                    user_email.clone(),
+                    current_workspace_name.clone(),
+                    Some(format!(
+                        "Konto NIP utworzono, ale nie udało się przypisać go do workspace: {e}"
+                    )),
+                    form_nip,
+                    form_display_name,
+                    csrf_token,
                 );
             }
 
             Redirect::to("/accounts").into_response()
         }
-        Err(e) => render_with_status(
+        Err(e) => render_account_add_page(
             StatusCode::INTERNAL_SERVER_ERROR,
-            AccountAddTemplate {
-                active: "/accounts",
-                nip_prefix: None,
-                user_email: auth.email,
-                error: Some(format!("Błąd serwera: {e}")),
-                nip: form_nip,
-                display_name: form_display_name,
-                csrf_token,
-            },
+            user_email,
+            current_workspace_name,
+            Some(format!("Błąd serwera: {e}")),
+            form_nip,
+            form_display_name,
+            csrf_token,
         ),
     }
 }
@@ -647,20 +726,7 @@ pub async fn certificate_form(
     session: Session,
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
-    let can_manage_credentials = match state
-        .nip_account_repo
-        .can_manage_credentials(&nip_ctx.user.id, &nip_ctx.account.id)
-        .await
-    {
-        Ok(allowed) => allowed,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Nie udało się sprawdzić uprawnień do certyfikatu: {e}"),
-            )
-                .into_response();
-        }
-    };
+    let can_manage_credentials = nip_ctx.membership.can_manage_credentials;
     render_certificate_page(
         nip_ctx.account,
         nip_ctx.user.email,
@@ -689,20 +755,7 @@ pub async fn certificate_save(
     let user_email = nip_ctx.user.email;
     let user_id = nip_ctx.user.id;
     let mut account = nip_ctx.account;
-    let can_manage_credentials = match state
-        .nip_account_repo
-        .can_manage_credentials(&user_id, &account.id)
-        .await
-    {
-        Ok(allowed) => allowed,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Nie udało się sprawdzić uprawnień do certyfikatu: {e}"),
-            )
-                .into_response();
-        }
-    };
+    let can_manage_credentials = nip_ctx.membership.can_manage_credentials;
     let audit_ip = client_ip(&headers);
 
     if !can_manage_credentials {
@@ -899,7 +952,6 @@ mod tests {
     use axum::extract::{FromRequest, Multipart, State};
     use axum::http::{HeaderMap, Request, StatusCode};
     use chrono::Utc;
-    use ksef_core::domain::account_scope::AccountScope;
     use ksef_core::domain::environment::KSeFEnvironment;
     use ksef_core::domain::nip::Nip;
     use ksef_core::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
@@ -933,7 +985,8 @@ mod tests {
 
     use crate::auth_rate_limit::AuthRateLimiter;
     use crate::csrf::CSRF_SESSION_KEY;
-    use crate::extractors::{AuthUser, CsrfForm, NipContext};
+    use crate::email::NoopEmailSender;
+    use crate::extractors::{AuthUser, CsrfForm, NipContext, WorkspaceContext};
     use crate::state::AppState;
 
     fn make_user(email: &str) -> User {
@@ -944,6 +997,45 @@ mod tests {
             password_hash: "test-password-hash".to_string(),
             created_at: now,
             updated_at: now,
+        }
+    }
+
+    async fn attach_account_to_workspace(
+        state: &AppState,
+        workspace_id: &ksef_core::domain::workspace::WorkspaceId,
+        attached_by: &ksef_core::domain::user::UserId,
+        account_id: &NipAccountId,
+    ) {
+        state
+            .workspace_repo
+            .attach_nip(
+                workspace_id,
+                account_id,
+                ksef_core::domain::workspace::WorkspaceNipOwnership::WorkspaceOwned,
+                attached_by,
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn nip_ctx_for_workspace_user(
+        state: &AppState,
+        workspace_id: &ksef_core::domain::workspace::WorkspaceId,
+        user: &User,
+        nip: &Nip,
+    ) -> NipContext {
+        let (account, scope, membership) = state
+            .workspace_repo
+            .find_user_account_in_workspace(workspace_id, &user.id, nip)
+            .await
+            .unwrap()
+            .unwrap();
+
+        NipContext {
+            user: auth_user(user),
+            membership,
+            account,
+            scope,
         }
     }
 
@@ -1032,6 +1124,7 @@ mod tests {
             ksef_environment: environment,
             user_repo: db.user_repo.clone(),
             nip_account_repo: db.nip_account_repo.clone(),
+            workspace_repo: db.workspace_repo.clone(),
             company_lookup_service,
             invoice_sequence: db.invoice_sequence.clone(),
             invoice_service,
@@ -1045,9 +1138,11 @@ mod tests {
             offline_service,
             qr_service,
             audit_service,
+            email_sender: Arc::new(NoopEmailSender),
             export_keys: Arc::new(Mutex::new(HashMap::new())),
             fetch_jobs: Arc::new(Mutex::new(HashMap::new())),
             auth_rate_limiter: AuthRateLimiter::default(),
+            public_base_url: "https://app.example.test".to_string(),
             allowed_emails: Vec::new(),
         };
 
@@ -1058,6 +1153,19 @@ mod tests {
         AuthUser {
             id: user.id.clone(),
             email: user.email.clone(),
+        }
+    }
+
+    async fn workspace_ctx(state: &AppState, user: &User) -> WorkspaceContext {
+        let summary = state
+            .workspace_repo
+            .ensure_default_workspace(&user.id, &user.email)
+            .await
+            .unwrap();
+        WorkspaceContext {
+            user: auth_user(user),
+            workspace: summary.workspace,
+            membership: summary.membership,
         }
     }
 
@@ -1073,14 +1181,6 @@ mod tests {
     async fn response_text(response: axum::response::Response) -> String {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
-    }
-
-    fn nip_ctx(user: &User, account: NipAccount, scope: AccountScope) -> NipContext {
-        NipContext {
-            user: auth_user(user),
-            account,
-            scope,
-        }
     }
 
     async fn multipart_from_text_fields(
@@ -1177,15 +1277,19 @@ mod tests {
         let nip = Nip::parse("5260250274").unwrap();
         let account = make_account(&nip);
         state.nip_account_repo.create(&account).await.unwrap();
-        state
-            .nip_account_repo
-            .grant_access(&owner_id, &account.id, true)
-            .await
-            .unwrap();
+        let owner_workspace = workspace_ctx(&state, &owner).await;
+        attach_account_to_workspace(
+            &state,
+            &owner_workspace.workspace.id,
+            &owner_id,
+            &account.id,
+        )
+        .await;
+        let other_workspace = workspace_ctx(&state, &other).await;
 
         let response = add(
             State(state.clone()),
-            auth_user(&other),
+            other_workspace.clone(),
             session_with_csrf("csrf-add").await,
             CsrfForm(AddAccountFormData {
                 nip: nip.to_string(),
@@ -1194,13 +1298,13 @@ mod tests {
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = response_text(response).await;
-        assert!(body.contains("nie da się samodzielnie dopiąć"));
+        assert!(body.contains("nie da się dopiąć do drugiego workspace"));
         assert!(
             state
-                .nip_account_repo
-                .verify_access(&other.id, &nip)
+                .workspace_repo
+                .find_user_account_in_workspace(&other_workspace.workspace.id, &other.id, &nip)
                 .await
                 .unwrap()
                 .is_none()
@@ -1217,25 +1321,24 @@ mod tests {
         let nip = Nip::parse("5260250274").unwrap();
         let account = make_account(&nip);
         state.nip_account_repo.create(&account).await.unwrap();
-        state
-            .nip_account_repo
-            .grant_access(&owner_id, &account.id, true)
-            .await
-            .unwrap();
-        let (account, scope) = state
-            .nip_account_repo
-            .verify_access(&owner.id, &nip)
-            .await
-            .unwrap()
-            .unwrap();
-        let account_id = account.id.clone();
+        let owner_workspace = workspace_ctx(&state, &owner).await;
+        attach_account_to_workspace(
+            &state,
+            &owner_workspace.workspace.id,
+            &owner_id,
+            &account.id,
+        )
+        .await;
+        let nip_ctx =
+            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &owner, &nip).await;
+        let account_id = nip_ctx.account.id.clone();
         let (cert_pem, key_pem) = generate_pair();
         let cert_text = String::from_utf8(cert_pem.clone()).unwrap();
         let key_text = String::from_utf8(key_pem.clone()).unwrap();
 
         let response = certificate_save(
             State(state.clone()),
-            nip_ctx(&owner, account, scope),
+            nip_ctx,
             HeaderMap::new(),
             session_with_csrf("csrf-save").await,
             multipart_from_text_fields(&state, "csrf-save", &cert_text, &key_text).await,
@@ -1291,27 +1394,28 @@ mod tests {
         let nip = Nip::parse("5260250274").unwrap();
         let account = make_account(&nip);
         state.nip_account_repo.create(&account).await.unwrap();
+        let owner_workspace = workspace_ctx(&state, &owner).await;
         state
-            .nip_account_repo
-            .grant_access(&owner_id, &account.id, true)
+            .workspace_repo
+            .add_member(
+                &owner_workspace.workspace.id,
+                &operator_id,
+                ksef_core::domain::workspace::WorkspaceRole::Operator,
+            )
             .await
             .unwrap();
-        state
-            .nip_account_repo
-            .grant_access(&operator_id, &account.id, false)
-            .await
-            .unwrap();
-        let (account, scope) = state
-            .nip_account_repo
-            .verify_access(&operator.id, &nip)
-            .await
-            .unwrap()
-            .unwrap();
+        attach_account_to_workspace(
+            &state,
+            &owner_workspace.workspace.id,
+            &owner_id,
+            &account.id,
+        )
+        .await;
         let (cert_pem, key_pem) = generate_pair();
 
         let response = certificate_save(
             State(state.clone()),
-            nip_ctx(&operator, account, scope),
+            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &operator, &nip).await,
             HeaderMap::new(),
             session_with_csrf("csrf-save").await,
             multipart_from_text_fields(
@@ -1350,26 +1454,27 @@ mod tests {
         let nip = Nip::parse("5260250274").unwrap();
         let account = make_account(&nip);
         state.nip_account_repo.create(&account).await.unwrap();
+        let owner_workspace = workspace_ctx(&state, &owner).await;
         state
-            .nip_account_repo
-            .grant_access(&owner_id, &account.id, true)
+            .workspace_repo
+            .add_member(
+                &owner_workspace.workspace.id,
+                &operator_id,
+                ksef_core::domain::workspace::WorkspaceRole::Operator,
+            )
             .await
             .unwrap();
-        state
-            .nip_account_repo
-            .grant_access(&operator_id, &account.id, false)
-            .await
-            .unwrap();
-        let (account, scope) = state
-            .nip_account_repo
-            .verify_access(&operator.id, &nip)
-            .await
-            .unwrap()
-            .unwrap();
+        attach_account_to_workspace(
+            &state,
+            &owner_workspace.workspace.id,
+            &owner_id,
+            &account.id,
+        )
+        .await;
 
         let response = certificate_form(
-            State(state),
-            nip_ctx(&operator, account, scope),
+            State(state.clone()),
+            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &operator, &nip).await,
             session_with_csrf("csrf-form").await,
         )
         .await;
