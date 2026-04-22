@@ -1,6 +1,8 @@
 <nav class="navbar" aria-label="Nawigacja">
   <a href="/accounts" class="navbar-brand">KSeF<span>Pay</span></a>
   <a href="/accounts" class="{% if active == "/accounts" %}active{% endif %}">Konta NIP</a>
+  <a href="/workspaces/access" class="{% if active == "/workspace-access" || active == "/workspace-new" %}active{% endif %}">Workspace</a>
+  <a href="/application-access" class="{% if active == "/application-access" %}active{% endif %}">Dostęp do aplikacji</a>
   {% if let Some(nip_val) = nip_prefix %}
   <div class="nav-sep"></div>
   <a href="/accounts/{{ nip_val }}/" class="{% if active == "/" %}active{% endif %}">Dashboard</a>

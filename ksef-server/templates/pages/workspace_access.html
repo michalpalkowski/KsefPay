@@ -1,0 +1,103 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Dostęp Workspace - KSeF Pay</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>Udostępnianie Workspace</h1>
+    <p class="page-copy">Zarządzasz współdzielonym dostępem do workspace <strong>{{ current_workspace_name }}</strong>.</p>
+  </div>
+
+  {% if let Some(msg) = error %}
+  <div class="alert alert-error">{{ msg }}</div>
+  {% endif %}
+
+  {% if let Some(msg) = success %}
+  <div class="alert alert-success">{{ msg }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Co oznacza zaproszenie</h2>
+    <p class="page-copy">
+      Zaproszenie nie daje tylko dostępu do aplikacji. Zaproszona osoba dołącza do tego konkretnego workspace
+      i po akceptacji zobaczy jego dane zgodnie z rolą, w tym przypisane NIP-y, faktury i inne zasoby workspace.
+    </p>
+    <p class="page-copy">
+      Jeśli chcesz, aby ktoś miał dostęp do aplikacji, ale pracował na własnych danych, użyj osobnego flow
+      <strong>Dostęp do aplikacji</strong>. To tworzy niezależny workspace zamiast współdzielić ten obecny.
+    </p>
+    <div class="form-actions">
+      <a href="/application-access" class="btn btn-secondary">Daj dostęp do aplikacji</a>
+      <a href="/workspaces/new" class="btn btn-secondary">Utwórz osobny workspace</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Nowe zaproszenie do współdzielonego workspace</h2>
+    {% if !email_delivery_enabled %}
+    <p class="page-copy">
+      Ten tryb środowiska nie ma włączonego SMTP. Udostępnianie workspace mailem jest wyłączone, żeby nie uruchamiać pół-działającej ścieżki współdzielenia danych.
+      Jeśli chcesz dać komuś niezależny dostęp do aplikacji bez SMTP, użyj ekranu <strong>Dostęp do aplikacji</strong> i dodaj zaufany email do rejestracji.
+    </p>
+    {% endif %}
+    <form method="post" action="/workspaces/invites" class="stack-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+      <div class="form-row">
+        <label for="email">Email użytkownika</label>
+        <input type="email" id="email" name="email" value="{{ invite_email }}" placeholder="user@example.com" required{% if !email_delivery_enabled %} disabled{% endif %} />
+      </div>
+      <div class="form-row">
+        <label for="role">Rola</label>
+        <select id="role" name="role" required{% if !email_delivery_enabled %} disabled{% endif %}>
+          <option value="" disabled{% if selected_role == "" %} selected{% endif %}>Wybierz rolę</option>
+          <option value="operator"{% if selected_role == "operator" %} selected{% endif %}>Operator</option>
+          <option value="read_only"{% if selected_role == "read_only" %} selected{% endif %}>Read only</option>
+          <option value="admin"{% if selected_role == "admin" %} selected{% endif %}>Admin</option>
+        </select>
+        <small class="form-hint">Rola określa zakres pracy we wspólnym workspace, nie tworzy osobnej przestrzeni danych.</small>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary"{% if !email_delivery_enabled %} disabled{% endif %}>Udostępnij workspace</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Oczekujące zaproszenia</h2>
+    {% if pending_invites.is_empty() %}
+    <p class="page-copy">Brak oczekujących zaproszeń.</p>
+    {% else %}
+    <div class="table-wrap">
+      <table class="invoice-table">
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Rola</th>
+            <th>Ważne do</th>
+            <th>Akcje</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for invite in pending_invites %}
+          <tr>
+            <td>{{ invite.email }}</td>
+            <td>{{ invite.role_label }}</td>
+            <td>{{ invite.expires_at }}</td>
+            <td>
+              <form method="post" action="/workspaces/invites/{{ invite.id }}/revoke" class="inline-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+                <button type="submit" class="btn btn-secondary btn-sm">Odwołaj</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

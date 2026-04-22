@@ -5,6 +5,7 @@ use axum::routing::{get, post};
 
 pub mod accounts;
 mod api;
+mod application_access;
 pub mod auth;
 mod dashboard;
 mod export;
@@ -15,6 +16,7 @@ mod permissions;
 mod profile;
 mod sessions;
 mod tokens;
+mod workspaces;
 
 use crate::state::AppState;
 
@@ -33,6 +35,24 @@ pub fn router() -> Router<AppState> {
         .route("/profile/password", post(profile::change_password))
         .route("/accounts", get(accounts::list))
         .route("/accounts/add", get(accounts::add_form).post(accounts::add))
+        .route("/application-access", get(application_access::page))
+        .route(
+            "/application-access/invites",
+            post(application_access::create_invite),
+        )
+        .route(
+            "/application-access/invites/{invite_id}/revoke",
+            post(application_access::revoke_invite),
+        )
+        .route("/workspaces/access", get(workspaces::access_page))
+        .route("/workspaces/new", get(workspaces::new_page))
+        .route("/workspaces", post(workspaces::create_workspace))
+        .route("/workspaces/select", post(workspaces::select))
+        .route("/workspaces/invites", post(workspaces::create_invite))
+        .route(
+            "/workspaces/invites/{invite_id}/revoke",
+            post(workspaces::revoke_invite),
+        )
         .route(
             "/accounts/{nip}/certificate",
             get(accounts::certificate_form).post(accounts::certificate_save),

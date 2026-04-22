@@ -32,15 +32,19 @@ use ksef_core::services::session_service::{AuthMethod, SessionService};
 use ksef_core::services::token_mgmt_service::TokenMgmtService;
 use ksef_core::workers::job_worker::JobWorker;
 
+mod application_access_invites;
 mod audit_log;
 mod auth_rate_limit;
 mod config;
 mod csrf;
 mod db_backend;
+mod email;
 mod extractors;
+mod invite_tokens;
 mod request_meta;
 mod routes;
 mod state;
+mod workspace_invites;
 
 use state::AppState;
 
@@ -170,6 +174,10 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let qr_service = Arc::new(QRService::new(config.ksef_environment, qr_renderer.clone()));
+    let email_sender: email::SharedEmailSender = match config.smtp.as_ref() {
+        Some(smtp) => Arc::new(email::SmtpEmailSender::new(smtp).map_err(anyhow::Error::msg)?),
+        None => Arc::new(email::NoopEmailSender),
+    };
 
     let offline_service = Arc::new(OfflineService::new(
         QRService::new(config.ksef_environment, qr_renderer),
@@ -200,7 +208,10 @@ async fn main() -> anyhow::Result<()> {
         export_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         fetch_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         auth_rate_limiter: auth_rate_limit::AuthRateLimiter::default(),
+        public_base_url: config.app_base_url,
         allowed_emails: config.allowed_emails,
+        application_access_mode: config.application_access_mode,
+        email_delivery_enabled: config.smtp.is_some(),
         company_lookup_service,
         invoice_sequence: db.invoice_sequence.clone(),
         invoice_service,
@@ -210,6 +221,9 @@ async fn main() -> anyhow::Result<()> {
         permission_service,
         token_mgmt_service,
         local_token_repo: db.local_token_repo.clone(),
+        workspace_repo: db.workspace_repo.clone(),
+        application_access_repo: db.application_access_repo.clone(),
+        email_sender,
         export_service,
         offline_service,
         qr_service,

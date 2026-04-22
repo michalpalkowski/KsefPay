@@ -1,4 +1,5 @@
 pub mod account_scope;
+pub mod application_access;
 pub mod audit;
 pub mod auth;
 pub mod batch;
@@ -21,4 +22,5 @@ pub mod rate_limit;
 pub mod session;
 pub mod token_mgmt;
 pub mod user;
+pub mod workspace;
 pub mod xml;

@@ -6,6 +6,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::domain::account_scope::AccountScope;
+use crate::domain::application_access::{
+    ApplicationAccessInvite, ApplicationAccessInviteId, TrustedApplicationEmailAccess,
+    TrustedApplicationEmailAccessId,
+};
 use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
@@ -16,8 +20,13 @@ use crate::domain::nip_account::{NipAccount, NipAccountId};
 use crate::domain::session::KSeFNumber;
 use crate::domain::token_mgmt::LocalToken;
 use crate::domain::user::{User, UserId};
+use crate::domain::workspace::{
+    Workspace, WorkspaceId, WorkspaceInvite, WorkspaceInviteId, WorkspaceMembership,
+    WorkspaceNipOwnership, WorkspaceRole, WorkspaceSummary,
+};
 use crate::error::{QueueError, RepositoryError};
 use crate::infra::crypto::CertificateSecretBox;
+use crate::ports::application_access_repository::ApplicationAccessRepository;
 use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -28,6 +37,7 @@ use crate::ports::nip_account_repository::NipAccountRepository;
 use crate::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use crate::ports::transaction::{AtomicScope, AtomicScopeFactory};
 use crate::ports::user_repository::UserRepository;
+use crate::ports::workspace_repository::WorkspaceRepository;
 
 /// Run all SQLite migrations against the given pool.
 ///
@@ -144,6 +154,56 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .execute(pool)
             .await?;
     }
+    if version < 11 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/011_workspaces.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 11")
+            .execute(pool)
+            .await?;
+    }
+    if version < 12 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/012_drop_user_nip_access.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 12")
+            .execute(pool)
+            .await?;
+    }
+    if version < 13 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/013_application_access_invites.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 13")
+            .execute(pool)
+            .await?;
+    }
+    if version < 14 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/014_invite_integrity.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 14")
+            .execute(pool)
+            .await?;
+    }
+    if version < 15 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/015_trusted_application_access.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 15")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -159,6 +219,13 @@ async fn detect_applied_version(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 
     match &invoice_sql {
         None => return Ok(0), // fresh database — no tables yet
+        Some(_) if has_application_access_invites_table(pool).await? => return Ok(13),
+        Some(_)
+            if has_workspaces_table(pool).await? && !has_user_nip_access_table(pool).await? =>
+        {
+            return Ok(12);
+        }
+        Some(_) if has_workspaces_table(pool).await? => return Ok(11),
         Some(_) if has_manage_credentials_column(pool).await? => return Ok(10),
         Some(sql) if sql.contains("UNIQUE (ksef_number, nip_account_id)") => return Ok(9),
         _ => {}
@@ -196,6 +263,30 @@ async fn has_manage_credentials_column(pool: &SqlitePool) -> Result<bool, sqlx::
     Ok(rows
         .iter()
         .any(|(_, name, _, _, _, _)| name == "can_manage_credentials"))
+}
+
+async fn has_application_access_invites_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'application_access_invites'",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+async fn has_workspaces_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+async fn has_user_nip_access_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'user_nip_access'",
+    )
+    .fetch_one(pool)
+    .await
 }
 
 /// SQLite database handle. Implements all repository/queue/session ports.
@@ -596,6 +687,257 @@ impl UserRepository for Db {
 }
 
 #[async_trait]
+impl ApplicationAccessRepository for Db {
+    async fn create_invite(
+        &self,
+        invite: &ApplicationAccessInvite,
+    ) -> Result<ApplicationAccessInviteId, RepositoryError> {
+        queries::application_access::create_invite(&self.pool, invite).await
+    }
+
+    async fn list_pending_invites(&self) -> Result<Vec<ApplicationAccessInvite>, RepositoryError> {
+        queries::application_access::list_pending_invites(&self.pool).await
+    }
+
+    async fn find_invite_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ApplicationAccessInvite>, RepositoryError> {
+        queries::application_access::find_invite_by_token_hash(&self.pool, token_hash).await
+    }
+
+    async fn activate_application_access(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError> {
+        let tx = self.tx().await?;
+        let summary = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            let summary =
+                queries::workspace::ensure_default_workspace_in_tx(inner, user_id, user_email)
+                    .await?;
+            queries::application_access::accept_invite(&mut **inner, invite_id).await?;
+            summary
+        };
+        tx.commit().await?;
+        Ok(summary)
+    }
+
+    async fn accept_invite(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::accept_invite(&self.pool, invite_id).await
+    }
+
+    async fn revoke_invite(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::revoke_invite(&self.pool, invite_id).await
+    }
+
+    async fn create_trusted_email_access(
+        &self,
+        access: &TrustedApplicationEmailAccess,
+    ) -> Result<TrustedApplicationEmailAccessId, RepositoryError> {
+        queries::application_access::create_trusted_email_access(&self.pool, access).await
+    }
+
+    async fn list_pending_trusted_email_access(
+        &self,
+    ) -> Result<Vec<TrustedApplicationEmailAccess>, RepositoryError> {
+        queries::application_access::list_pending_trusted_email_access(&self.pool).await
+    }
+
+    async fn find_pending_trusted_email_access_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<TrustedApplicationEmailAccess>, RepositoryError> {
+        queries::application_access::find_pending_trusted_email_access_by_email(&self.pool, email)
+            .await
+    }
+
+    async fn activate_trusted_email_access(
+        &self,
+        access_id: &TrustedApplicationEmailAccessId,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError> {
+        let tx = self.tx().await?;
+        let summary = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            let summary =
+                queries::workspace::ensure_default_workspace_in_tx(inner, user_id, user_email)
+                    .await?;
+            queries::application_access::consume_trusted_email_access(&mut **inner, access_id)
+                .await?;
+            summary
+        };
+        tx.commit().await?;
+        Ok(summary)
+    }
+
+    async fn revoke_trusted_email_access(
+        &self,
+        access_id: &TrustedApplicationEmailAccessId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::revoke_trusted_email_access(&self.pool, access_id).await
+    }
+}
+
+#[async_trait]
+impl WorkspaceRepository for Db {
+    async fn create_workspace(
+        &self,
+        workspace: &Workspace,
+        owner_id: &UserId,
+    ) -> Result<WorkspaceId, RepositoryError> {
+        let tx = self.tx().await?;
+        let workspace_id = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            queries::workspace::create_workspace_in_tx(inner, workspace, owner_id).await?
+        };
+        tx.commit().await?;
+        Ok(workspace_id)
+    }
+
+    async fn ensure_default_workspace(
+        &self,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError> {
+        let tx = self.tx().await?;
+        let summary = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            queries::workspace::ensure_default_workspace_in_tx(inner, user_id, user_email).await?
+        };
+        tx.commit().await?;
+        Ok(summary)
+    }
+
+    async fn find_by_id(&self, workspace_id: &WorkspaceId) -> Result<Workspace, RepositoryError> {
+        queries::workspace::find_by_id(&self.pool, workspace_id).await
+    }
+
+    async fn list_for_user(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Vec<WorkspaceSummary>, RepositoryError> {
+        queries::workspace::list_for_user(&self.pool, user_id).await
+    }
+
+    async fn find_membership(
+        &self,
+        workspace_id: &WorkspaceId,
+        user_id: &UserId,
+    ) -> Result<Option<WorkspaceMembership>, RepositoryError> {
+        queries::workspace::find_membership(&self.pool, workspace_id, user_id).await
+    }
+
+    async fn add_member(
+        &self,
+        workspace_id: &WorkspaceId,
+        user_id: &UserId,
+        role: WorkspaceRole,
+    ) -> Result<(), RepositoryError> {
+        queries::workspace::add_member(&self.pool, workspace_id, user_id, role).await
+    }
+
+    async fn attach_nip(
+        &self,
+        workspace_id: &WorkspaceId,
+        account_id: &NipAccountId,
+        ownership: WorkspaceNipOwnership,
+        attached_by: &UserId,
+    ) -> Result<(), RepositoryError> {
+        queries::workspace::attach_nip(&self.pool, workspace_id, account_id, ownership, attached_by)
+            .await
+    }
+
+    async fn list_nip_accounts_for_user(
+        &self,
+        workspace_id: &WorkspaceId,
+        user_id: &UserId,
+    ) -> Result<Vec<NipAccount>, RepositoryError> {
+        queries::workspace::list_nip_accounts_for_user(
+            &self.pool,
+            workspace_id,
+            user_id,
+            &self.certificate_secret_box,
+        )
+        .await
+    }
+
+    async fn find_user_account_in_workspace(
+        &self,
+        workspace_id: &WorkspaceId,
+        user_id: &UserId,
+        nip: &Nip,
+    ) -> Result<Option<(NipAccount, AccountScope, WorkspaceMembership)>, RepositoryError> {
+        queries::workspace::find_user_account_in_workspace(
+            &self.pool,
+            workspace_id,
+            user_id,
+            nip,
+            &self.certificate_secret_box,
+        )
+        .await
+    }
+
+    async fn create_invite(
+        &self,
+        invite: &WorkspaceInvite,
+    ) -> Result<WorkspaceInviteId, RepositoryError> {
+        queries::workspace::create_invite(&self.pool, invite).await
+    }
+
+    async fn list_pending_invites(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> Result<Vec<WorkspaceInvite>, RepositoryError> {
+        queries::workspace::list_pending_invites(&self.pool, workspace_id).await
+    }
+
+    async fn find_invite_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<WorkspaceInvite>, RepositoryError> {
+        queries::workspace::find_invite_by_token_hash(&self.pool, token_hash).await
+    }
+
+    async fn activate_invite_membership(
+        &self,
+        invite: &WorkspaceInvite,
+        user_id: &UserId,
+    ) -> Result<(), RepositoryError> {
+        let tx = self.tx().await?;
+        {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            queries::workspace::add_member(&mut **inner, &invite.workspace_id, user_id, invite.role)
+                .await?;
+            queries::workspace::accept_invite(&mut **inner, &invite.id).await?;
+        }
+        tx.commit().await
+    }
+
+    async fn accept_invite(&self, invite_id: &WorkspaceInviteId) -> Result<(), RepositoryError> {
+        queries::workspace::accept_invite(&self.pool, invite_id).await
+    }
+
+    async fn revoke_invite(&self, invite_id: &WorkspaceInviteId) -> Result<(), RepositoryError> {
+        queries::workspace::revoke_invite(&self.pool, invite_id).await
+    }
+}
+
+#[async_trait]
 impl UserRepository for Tx {
     async fn create(&self, user: &User) -> Result<UserId, RepositoryError> {
         let mut guard = self.conn().await;
@@ -673,45 +1015,6 @@ impl NipAccountRepository for Db {
         queries::nip_account::update_credentials(&self.pool, account, &self.certificate_secret_box)
             .await
     }
-
-    async fn grant_access(
-        &self,
-        user_id: &UserId,
-        account_id: &NipAccountId,
-        can_manage_credentials: bool,
-    ) -> Result<(), RepositoryError> {
-        queries::nip_account::grant_access(&self.pool, user_id, account_id, can_manage_credentials)
-            .await
-    }
-
-    async fn revoke_access(
-        &self,
-        user_id: &UserId,
-        account_id: &NipAccountId,
-    ) -> Result<(), RepositoryError> {
-        queries::nip_account::revoke_access(&self.pool, user_id, account_id).await
-    }
-
-    async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
-        queries::nip_account::list_by_user(&self.pool, user_id, &self.certificate_secret_box).await
-    }
-
-    async fn verify_access(
-        &self,
-        user_id: &UserId,
-        nip: &Nip,
-    ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
-        queries::nip_account::verify_access(&self.pool, user_id, nip, &self.certificate_secret_box)
-            .await
-    }
-
-    async fn can_manage_credentials(
-        &self,
-        user_id: &UserId,
-        account_id: &NipAccountId,
-    ) -> Result<bool, RepositoryError> {
-        queries::nip_account::can_manage_credentials(&self.pool, user_id, account_id).await
-    }
 }
 
 #[async_trait]
@@ -739,55 +1042,6 @@ impl NipAccountRepository for Tx {
         let tx = guard.as_mut().unwrap();
         queries::nip_account::update_credentials(&mut **tx, account, &self.certificate_secret_box)
             .await
-    }
-
-    async fn grant_access(
-        &self,
-        user_id: &UserId,
-        account_id: &NipAccountId,
-        can_manage_credentials: bool,
-    ) -> Result<(), RepositoryError> {
-        let mut guard = self.conn().await;
-        let tx = guard.as_mut().unwrap();
-        queries::nip_account::grant_access(&mut **tx, user_id, account_id, can_manage_credentials)
-            .await
-    }
-
-    async fn revoke_access(
-        &self,
-        user_id: &UserId,
-        account_id: &NipAccountId,
-    ) -> Result<(), RepositoryError> {
-        let mut guard = self.conn().await;
-        let tx = guard.as_mut().unwrap();
-        queries::nip_account::revoke_access(&mut **tx, user_id, account_id).await
-    }
-
-    async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
-        let mut guard = self.conn().await;
-        let tx = guard.as_mut().unwrap();
-        queries::nip_account::list_by_user(&mut **tx, user_id, &self.certificate_secret_box).await
-    }
-
-    async fn verify_access(
-        &self,
-        user_id: &UserId,
-        nip: &Nip,
-    ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
-        let mut guard = self.conn().await;
-        let tx = guard.as_mut().unwrap();
-        queries::nip_account::verify_access(&mut **tx, user_id, nip, &self.certificate_secret_box)
-            .await
-    }
-
-    async fn can_manage_credentials(
-        &self,
-        user_id: &UserId,
-        account_id: &NipAccountId,
-    ) -> Result<bool, RepositoryError> {
-        let mut guard = self.conn().await;
-        let tx = guard.as_mut().unwrap();
-        queries::nip_account::can_manage_credentials(&mut **tx, user_id, account_id).await
     }
 }
 

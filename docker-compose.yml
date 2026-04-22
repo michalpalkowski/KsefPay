@@ -15,5 +15,11 @@ services:
       timeout: 5s
       retries: 5
 
+  mailpit:
+    image: axllent/mailpit:v1.26
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
 volumes:
   pgdata:

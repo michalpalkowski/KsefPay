@@ -1,3 +1,4 @@
+pub mod application_access_repository;
 pub mod audit_log;
 pub mod batch_archive_builder;
 pub mod company_cache;
@@ -26,3 +27,4 @@ pub mod session_repository;
 pub mod signer_factory;
 pub mod transaction;
 pub mod user_repository;
+pub mod workspace_repository;
