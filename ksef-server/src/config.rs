@@ -1,19 +1,21 @@
 use ksef_core::domain::environment::KSeFEnvironment;
 
 use crate::email::{SmtpAuthMode, SmtpEmailConfig, SmtpSecurityMode};
+use crate::state::ApplicationAccessMode;
 
 pub struct Config {
     pub database_url: String,
     pub server_host: String,
     pub server_port: u16,
     pub app_base_url: String,
-    pub smtp: SmtpEmailConfig,
+    pub smtp: Option<SmtpEmailConfig>,
     pub ksef_environment: KSeFEnvironment,
     pub cert_storage_key: Option<String>,
     pub ksef_cert_pem: Option<String>,
     pub ksef_key_pem: Option<String>,
     /// Allowlist of emails permitted to register. Empty = registration closed.
     pub allowed_emails: Vec<String>,
+    pub application_access_mode: ApplicationAccessMode,
 }
 
 impl Config {
@@ -46,56 +48,64 @@ impl Config {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
-        let smtp_server = std::env::var("SMTP_HOST").map_err(|_| "SMTP_HOST not set")?;
-        let smtp_port: u16 = std::env::var("SMTP_PORT")
-            .map_err(|_| "SMTP_PORT not set")?
-            .parse()
-            .map_err(|_| "SMTP_PORT must be a valid port number")?;
-        let smtp_security = match std::env::var("SMTP_SECURITY")
-            .unwrap_or_else(|_| "starttls".to_string())
+        let application_access_mode = match std::env::var("APPLICATION_ACCESS_MODE")
+            .unwrap_or_else(|_| "email_invite".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str()
         {
-            "starttls" => SmtpSecurityMode::StartTls,
-            "plaintext" => SmtpSecurityMode::Plaintext,
-            _ => return Err("SMTP_SECURITY must be one of: starttls, plaintext".to_string()),
+            "email_invite" => ApplicationAccessMode::EmailInvite,
+            "trusted_email" => ApplicationAccessMode::TrustedEmail,
+            _ => {
+                return Err(
+                    "APPLICATION_ACCESS_MODE must be one of: email_invite, trusted_email"
+                        .to_string(),
+                );
+            }
         };
-        let smtp_auth = match std::env::var("SMTP_AUTH")
-            .unwrap_or_else(|_| "required".to_string())
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "required" => SmtpAuthMode::Required,
-            "none" => SmtpAuthMode::None,
-            _ => return Err("SMTP_AUTH must be one of: required, none".to_string()),
-        };
-        let smtp_username = std::env::var("SMTP_USERNAME")
-            .ok()
-            .filter(|v| !v.is_empty());
-        let smtp_password = std::env::var("SMTP_PASSWORD")
-            .ok()
-            .filter(|v| !v.is_empty());
-        if matches!(smtp_auth, SmtpAuthMode::Required)
-            && (smtp_username.is_none() || smtp_password.is_none())
-        {
-            return Err(
-                "SMTP_USERNAME and SMTP_PASSWORD must be set when SMTP_AUTH=required"
-                    .to_string(),
-            );
-        }
-        let smtp_from_email =
-            std::env::var("SMTP_FROM_EMAIL").map_err(|_| "SMTP_FROM_EMAIL not set")?;
-        let smtp_from_name =
-            std::env::var("SMTP_FROM_NAME").unwrap_or_else(|_| "KSeF Pay".to_string());
 
-        Ok(Self {
-            database_url,
-            server_host,
-            server_port,
-            app_base_url,
-            smtp: SmtpEmailConfig {
+        let smtp = if matches!(application_access_mode, ApplicationAccessMode::EmailInvite) {
+            let smtp_server = std::env::var("SMTP_HOST").map_err(|_| "SMTP_HOST not set")?;
+            let smtp_port: u16 = std::env::var("SMTP_PORT")
+                .map_err(|_| "SMTP_PORT not set")?
+                .parse()
+                .map_err(|_| "SMTP_PORT must be a valid port number")?;
+            let smtp_security = match std::env::var("SMTP_SECURITY")
+                .unwrap_or_else(|_| "starttls".to_string())
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "starttls" => SmtpSecurityMode::StartTls,
+                "plaintext" => SmtpSecurityMode::Plaintext,
+                _ => return Err("SMTP_SECURITY must be one of: starttls, plaintext".to_string()),
+            };
+            let smtp_auth = match std::env::var("SMTP_AUTH")
+                .unwrap_or_else(|_| "required".to_string())
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "required" => SmtpAuthMode::Required,
+                "none" => SmtpAuthMode::None,
+                _ => return Err("SMTP_AUTH must be one of: required, none".to_string()),
+            };
+            let smtp_username = std::env::var("SMTP_USERNAME").ok().filter(|v| !v.is_empty());
+            let smtp_password = std::env::var("SMTP_PASSWORD").ok().filter(|v| !v.is_empty());
+            if matches!(smtp_auth, SmtpAuthMode::Required)
+                && (smtp_username.is_none() || smtp_password.is_none())
+            {
+                return Err(
+                    "SMTP_USERNAME and SMTP_PASSWORD must be set when SMTP_AUTH=required"
+                        .to_string(),
+                );
+            }
+            let smtp_from_email =
+                std::env::var("SMTP_FROM_EMAIL").map_err(|_| "SMTP_FROM_EMAIL not set")?;
+            let smtp_from_name =
+                std::env::var("SMTP_FROM_NAME").unwrap_or_else(|_| "KSeF Pay".to_string());
+
+            Some(SmtpEmailConfig {
                 server: smtp_server,
                 port: smtp_port,
                 security: smtp_security,
@@ -104,12 +114,23 @@ impl Config {
                 password: smtp_password,
                 from_email: smtp_from_email,
                 from_name: smtp_from_name,
-            },
+            })
+        } else {
+            None
+        };
+
+        Ok(Self {
+            database_url,
+            server_host,
+            server_port,
+            app_base_url,
+            smtp,
             ksef_environment,
             cert_storage_key,
             ksef_cert_pem,
             ksef_key_pem,
             allowed_emails,
+            application_access_mode,
         })
     }
 }

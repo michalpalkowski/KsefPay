@@ -54,6 +54,7 @@ struct WorkspaceAccessTemplate {
     nip_prefix: Option<String>,
     user_email: String,
     current_workspace_name: String,
+    email_delivery_enabled: bool,
     csrf_token: String,
     invite_email: String,
     selected_role: String,
@@ -90,6 +91,8 @@ enum SelectWorkspaceError {
 enum WorkspaceAccessError {
     #[error("forbidden workspace management")]
     Forbidden,
+    #[error("workspace sharing by email requires SMTP-enabled mode")]
+    EmailDeliveryDisabled,
     #[error("invalid email address")]
     InvalidEmail,
     #[error("invalid workspace role")]
@@ -155,6 +158,7 @@ fn render<T: Template>(tmpl: T) -> Response {
 }
 
 fn render_workspace_access(
+    state: &AppState,
     status: axum::http::StatusCode,
     workspace_ctx: &WorkspaceContext,
     csrf_token: String,
@@ -169,6 +173,7 @@ fn render_workspace_access(
         nip_prefix: None,
         user_email: workspace_ctx.user.email.clone(),
         current_workspace_name: workspace_ctx.workspace.display_name.clone(),
+        email_delivery_enabled: state.email_delivery_enabled,
         csrf_token,
         invite_email,
         selected_role,
@@ -340,6 +345,7 @@ pub async fn access_page(
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     if let Err(err) = ensure_manage_members(&workspace_ctx).await {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             csrf_token,
@@ -355,6 +361,7 @@ pub async fn access_page(
         Ok(invites) => invites,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -372,6 +379,7 @@ pub async fn access_page(
         nip_prefix: None,
         user_email: workspace_ctx.user.email,
         current_workspace_name: workspace_ctx.workspace.display_name,
+        email_delivery_enabled: state.email_delivery_enabled,
         csrf_token,
         invite_email: String::new(),
         selected_role: "operator".to_string(),
@@ -462,6 +470,7 @@ pub async fn create_invite(
 
     if let Err(err) = ensure_manage_members(&workspace_ctx).await {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             csrf_token,
@@ -473,10 +482,25 @@ pub async fn create_invite(
         );
     }
 
+    if !state.email_delivery_enabled {
+        return render_workspace_access(
+            &state,
+            axum::http::StatusCode::FAILED_DEPENDENCY,
+            &workspace_ctx,
+            csrf_token,
+            Vec::new(),
+            email,
+            selected_role,
+            Some(WorkspaceAccessError::EmailDeliveryDisabled.to_string()),
+            None,
+        );
+    }
+
     let pending_invites = match load_pending_invites(&state, &workspace_ctx.workspace.id).await {
         Ok(invites) => invites,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -493,6 +517,7 @@ pub async fn create_invite(
         Ok(role) => role,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::BAD_REQUEST,
                 &workspace_ctx,
                 csrf_token,
@@ -507,6 +532,7 @@ pub async fn create_invite(
 
     if !is_valid_email(&email) {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::BAD_REQUEST,
             &workspace_ctx,
             csrf_token,
@@ -520,6 +546,7 @@ pub async fn create_invite(
 
     if pending_invites.iter().any(|invite| invite.email == email) {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::CONFLICT,
             &workspace_ctx,
             csrf_token,
@@ -539,6 +566,7 @@ pub async fn create_invite(
         {
             Ok(Some(membership)) if membership.status == WorkspaceMembershipStatus::Active => {
                 return render_workspace_access(
+                    &state,
                     axum::http::StatusCode::CONFLICT,
                     &workspace_ctx,
                     csrf_token,
@@ -552,6 +580,7 @@ pub async fn create_invite(
             Ok(_) => {}
             Err(err) => {
                 return render_workspace_access(
+                    &state,
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     &workspace_ctx,
                     csrf_token,
@@ -566,6 +595,7 @@ pub async fn create_invite(
         Ok(None) => {}
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -594,6 +624,7 @@ pub async fn create_invite(
 
     if let Err(err) = state.workspace_repo.create_invite(&invite).await {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             &workspace_ctx,
             csrf_token,
@@ -619,6 +650,7 @@ pub async fn create_invite(
             Ok(invites) => invites,
             Err(load_err) => {
                 return render_workspace_access(
+                    &state,
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     &workspace_ctx,
                     csrf_token,
@@ -633,6 +665,7 @@ pub async fn create_invite(
             }
         };
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             &workspace_ctx,
             csrf_token,
@@ -648,6 +681,7 @@ pub async fn create_invite(
         Ok(invites) => invites,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -661,6 +695,7 @@ pub async fn create_invite(
     };
 
     render_workspace_access(
+        &state,
         axum::http::StatusCode::OK,
         &workspace_ctx,
         csrf_token,
@@ -683,6 +718,7 @@ pub async fn revoke_invite(
 
     if let Err(err) = ensure_manage_members(&workspace_ctx).await {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             csrf_token,
@@ -698,6 +734,7 @@ pub async fn revoke_invite(
         Ok(invites) => invites,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -714,6 +751,7 @@ pub async fn revoke_invite(
         Ok(invite_id) => invite_id,
         Err(_) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::BAD_REQUEST,
                 &workspace_ctx,
                 csrf_token,
@@ -734,6 +772,7 @@ pub async fn revoke_invite(
         Ok(invites) => invites,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -748,6 +787,7 @@ pub async fn revoke_invite(
 
     if !pending_for_check.iter().any(|invite| invite.id == invite_id) {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::NOT_FOUND,
             &workspace_ctx,
             csrf_token,
@@ -761,6 +801,7 @@ pub async fn revoke_invite(
 
     if let Err(err) = state.workspace_repo.revoke_invite(&invite_id).await {
         return render_workspace_access(
+            &state,
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             &workspace_ctx,
             csrf_token,
@@ -776,6 +817,7 @@ pub async fn revoke_invite(
         Ok(invites) => invites,
         Err(err) => {
             return render_workspace_access(
+                &state,
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 &workspace_ctx,
                 csrf_token,
@@ -788,6 +830,7 @@ pub async fn revoke_invite(
         }
     };
     render_workspace_access(
+        &state,
         axum::http::StatusCode::OK,
         &workspace_ctx,
         csrf_token,
@@ -899,7 +942,10 @@ mod tests {
         }
     }
 
-    async fn test_state(email_sender: Arc<dyn EmailSender>) -> (AppState, std::path::PathBuf) {
+    async fn test_state(
+        email_sender: Arc<dyn EmailSender>,
+        email_delivery_enabled: bool,
+    ) -> (AppState, std::path::PathBuf) {
         let db_path = std::env::temp_dir().join(format!(
             "ksef-server-workspaces-test-{}.db",
             uuid::Uuid::new_v4()
@@ -989,6 +1035,8 @@ mod tests {
             auth_rate_limiter: AuthRateLimiter::default(),
             public_base_url: "https://app.example.test".to_string(),
             allowed_emails: vec!["admin@example.com".to_string()],
+            application_access_mode: crate::state::ApplicationAccessMode::EmailInvite,
+            email_delivery_enabled,
         };
 
         (state, db_path)
@@ -1051,7 +1099,7 @@ mod tests {
     #[tokio::test]
     async fn owner_can_create_workspace_invite() {
         let sender = Arc::new(RecordingEmailSender::default());
-        let (state, db_path) = test_state(sender.clone()).await;
+        let (state, db_path) = test_state(sender.clone(), true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
@@ -1091,7 +1139,7 @@ mod tests {
 
     #[tokio::test]
     async fn operator_cannot_create_workspace_invite() {
-        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default()), true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace = state
@@ -1146,7 +1194,7 @@ mod tests {
             sent: Mutex::new(Vec::new()),
             fail: true,
         });
-        let (state, db_path) = test_state(sender).await;
+        let (state, db_path) = test_state(sender, true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
@@ -1176,7 +1224,7 @@ mod tests {
     #[tokio::test]
     async fn expired_invite_does_not_block_reinvite() {
         let sender = Arc::new(RecordingEmailSender::default());
-        let (state, db_path) = test_state(sender.clone()).await;
+        let (state, db_path) = test_state(sender.clone(), true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
@@ -1222,8 +1270,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workspace_invite_requires_email_delivery() {
+        let sender = Arc::new(RecordingEmailSender::default());
+        let (state, db_path) = test_state(sender, false).await;
+        let owner = make_user("owner@example.com");
+        state.user_repo.create(&owner).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
+
+        let response = create_invite(
+            State(state.clone()),
+            workspace_ctx,
+            session_with_csrf("csrf").await,
+            CsrfForm(CreateInviteFormData {
+                email: "new.user@example.com".to_string(),
+                role: "operator".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
+        let invites = state
+            .workspace_repo
+            .list_pending_invites(
+                &state
+                    .workspace_repo
+                    .list_for_user(&owner.id)
+                    .await
+                    .unwrap()[0]
+                    .workspace
+                    .id,
+            )
+            .await
+            .unwrap();
+        assert!(invites.is_empty());
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
     async fn create_workspace_creates_independent_workspace_and_switches_session() {
-        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default()), true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
@@ -1261,7 +1347,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_workspace_rejects_blank_name() {
-        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default()), true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
@@ -1285,7 +1371,7 @@ mod tests {
 
     #[tokio::test]
     async fn select_workspace_ignores_external_return_to() {
-        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default()), true).await;
         let owner = make_user("owner@example.com");
         state.user_repo.create(&owner).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;

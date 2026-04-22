@@ -174,8 +174,10 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let qr_service = Arc::new(QRService::new(config.ksef_environment, qr_renderer.clone()));
-    let email_sender: email::SharedEmailSender =
-        Arc::new(email::SmtpEmailSender::new(&config.smtp).map_err(anyhow::Error::msg)?);
+    let email_sender: email::SharedEmailSender = match config.smtp.as_ref() {
+        Some(smtp) => Arc::new(email::SmtpEmailSender::new(smtp).map_err(anyhow::Error::msg)?),
+        None => Arc::new(email::NoopEmailSender),
+    };
 
     let offline_service = Arc::new(OfflineService::new(
         QRService::new(config.ksef_environment, qr_renderer),
@@ -208,6 +210,8 @@ async fn main() -> anyhow::Result<()> {
         auth_rate_limiter: auth_rate_limit::AuthRateLimiter::default(),
         public_base_url: config.app_base_url,
         allowed_emails: config.allowed_emails,
+        application_access_mode: config.application_access_mode,
+        email_delivery_enabled: config.smtp.is_some(),
         company_lookup_service,
         invoice_sequence: db.invoice_sequence.clone(),
         invoice_service,

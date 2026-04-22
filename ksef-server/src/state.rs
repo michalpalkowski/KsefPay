@@ -24,6 +24,12 @@ use ksef_core::services::token_mgmt_service::TokenMgmtService;
 use crate::auth_rate_limit::AuthRateLimiter;
 use crate::email::SharedEmailSender;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplicationAccessMode {
+    EmailInvite,
+    TrustedEmail,
+}
+
 /// AES key + IV pair for export decryption.
 pub type ExportKeyStore = Arc<Mutex<HashMap<(NipAccountId, String), (Vec<u8>, Vec<u8>)>>>;
 
@@ -77,4 +83,8 @@ pub struct AppState {
     pub public_base_url: String,
     /// Allowlist of emails permitted to register. Empty = registration closed.
     pub allowed_emails: Vec<String>,
+    /// Controls how bootstrap admins grant independent access to the app.
+    pub application_access_mode: ApplicationAccessMode,
+    /// When false, SMTP-backed flows such as workspace sharing are unavailable.
+    pub email_delivery_enabled: bool,
 }

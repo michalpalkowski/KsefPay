@@ -37,15 +37,21 @@
 
   <div class="card">
     <h2>Nowe zaproszenie do współdzielonego workspace</h2>
+    {% if !email_delivery_enabled %}
+    <p class="page-copy">
+      Ten tryb środowiska nie ma włączonego SMTP. Udostępnianie workspace mailem jest wyłączone, żeby nie uruchamiać pół-działającej ścieżki współdzielenia danych.
+      Jeśli chcesz dać komuś niezależny dostęp do aplikacji bez SMTP, użyj ekranu <strong>Dostęp do aplikacji</strong> i dodaj zaufany email do rejestracji.
+    </p>
+    {% endif %}
     <form method="post" action="/workspaces/invites" class="stack-form">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
       <div class="form-row">
         <label for="email">Email użytkownika</label>
-        <input type="email" id="email" name="email" value="{{ invite_email }}" placeholder="user@example.com" required />
+        <input type="email" id="email" name="email" value="{{ invite_email }}" placeholder="user@example.com" required{% if !email_delivery_enabled %} disabled{% endif %} />
       </div>
       <div class="form-row">
         <label for="role">Rola</label>
-        <select id="role" name="role" required>
+        <select id="role" name="role" required{% if !email_delivery_enabled %} disabled{% endif %}>
           <option value="" disabled{% if selected_role == "" %} selected{% endif %}>Wybierz rolę</option>
           <option value="operator"{% if selected_role == "operator" %} selected{% endif %}>Operator</option>
           <option value="read_only"{% if selected_role == "read_only" %} selected{% endif %}>Read only</option>
@@ -54,7 +60,7 @@
         <small class="form-hint">Rola określa zakres pracy we wspólnym workspace, nie tworzy osobnej przestrzeni danych.</small>
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Udostępnij workspace</button>
+        <button type="submit" class="btn btn-primary"{% if !email_delivery_enabled %} disabled{% endif %}>Udostępnij workspace</button>
       </div>
     </form>
   </div>

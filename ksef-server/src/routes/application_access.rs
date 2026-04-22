@@ -6,7 +6,10 @@ use serde::Deserialize;
 use thiserror::Error;
 use tower_sessions::Session;
 
-use ksef_core::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
+use ksef_core::domain::application_access::{
+    ApplicationAccessInvite, ApplicationAccessInviteId, TrustedApplicationEmailAccess,
+    TrustedApplicationEmailAccessId,
+};
 
 use crate::csrf::ensure_csrf_token;
 use crate::email::{
@@ -14,6 +17,7 @@ use crate::email::{
 };
 use crate::extractors::{CsrfForm, WorkspaceContext};
 use crate::invite_tokens::{generate_invite_token, hash_invite_token, invite_expiration};
+use crate::state::ApplicationAccessMode;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -32,6 +36,14 @@ struct PendingApplicationAccessInviteTemplate {
     created_by_email: String,
 }
 
+#[derive(Debug, Clone)]
+struct PendingTrustedEmailAccessTemplate {
+    id: String,
+    email: String,
+    created_by_email: String,
+    created_at: String,
+}
+
 #[derive(Template)]
 #[template(path = "pages/application_access.html")]
 struct ApplicationAccessTemplate {
@@ -40,9 +52,11 @@ struct ApplicationAccessTemplate {
     user_email: String,
     current_workspace_name: String,
     can_manage_application_access: bool,
+    application_access_mode: &'static str,
     csrf_token: String,
     invite_email: String,
     pending_invites: Vec<PendingApplicationAccessInviteTemplate>,
+    pending_trusted_email_access: Vec<PendingTrustedEmailAccessTemplate>,
     error: Option<String>,
     success: Option<String>,
 }
@@ -57,8 +71,12 @@ enum ApplicationAccessError {
     InvalidEmail,
     #[error("application access invite already pending for this email")]
     DuplicateInvite,
+    #[error("trusted application access already pending for this email")]
+    DuplicateTrustedEmailAccess,
     #[error("application access invite not found")]
     InviteNotFound,
+    #[error("trusted application access not found")]
+    TrustedEmailAccessNotFound,
     #[error("application access email delivery failed: {0}")]
     InviteDelivery(#[from] EmailSendError),
 }
@@ -148,16 +166,52 @@ async fn load_pending_invites(
     Ok(templates)
 }
 
+async fn load_pending_trusted_email_access(
+    state: &AppState,
+) -> Result<Vec<PendingTrustedEmailAccessTemplate>, String> {
+    let entries = state
+        .application_access_repo
+        .list_pending_trusted_email_access()
+        .await
+        .map_err(|err| format!("Nie udało się pobrać zaufanych maili: {err}"))?;
+
+    let mut templates = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let created_by_email = state
+            .user_repo
+            .find_by_id(&entry.created_by_user_id)
+            .await
+            .map(|user| user.email)
+            .unwrap_or_else(|_| entry.created_by_user_id.to_string());
+
+        templates.push(PendingTrustedEmailAccessTemplate {
+            id: entry.id.to_string(),
+            email: entry.email,
+            created_by_email,
+            created_at: entry.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+        });
+    }
+
+    Ok(templates)
+}
+
 fn render_application_access(
+    state: &AppState,
     status: axum::http::StatusCode,
     workspace_ctx: &WorkspaceContext,
     can_manage_application_access: bool,
     csrf_token: String,
     invite_email: String,
     pending_invites: Vec<PendingApplicationAccessInviteTemplate>,
+    pending_trusted_email_access: Vec<PendingTrustedEmailAccessTemplate>,
     error: Option<String>,
     success: Option<String>,
 ) -> Response {
+    let application_access_mode = match state.application_access_mode {
+        ApplicationAccessMode::EmailInvite => "email_invite",
+        ApplicationAccessMode::TrustedEmail => "trusted_email",
+    };
+
     render(
         status,
         ApplicationAccessTemplate {
@@ -166,9 +220,11 @@ fn render_application_access(
             user_email: workspace_ctx.user.email.clone(),
             current_workspace_name: workspace_ctx.workspace.display_name.clone(),
             can_manage_application_access,
+            application_access_mode,
             csrf_token,
             invite_email,
             pending_invites,
+            pending_trusted_email_access,
             error,
             success,
         },
@@ -182,18 +238,35 @@ pub async fn page(
 ) -> Response {
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
     let can_manage_application_access = is_bootstrap_admin(&state, &workspace_ctx.user.email);
-    let pending_invites = if can_manage_application_access {
-        match load_pending_invites(&state).await {
-            Ok(invites) => invites,
-            Err(err) => {
-                return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, err).into_response();
+    let (pending_invites, pending_trusted_email_access) = if can_manage_application_access {
+        match state.application_access_mode {
+            ApplicationAccessMode::EmailInvite => {
+                let invites = match load_pending_invites(&state).await {
+                    Ok(invites) => invites,
+                    Err(err) => {
+                        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, err)
+                            .into_response();
+                    }
+                };
+                (invites, Vec::new())
+            }
+            ApplicationAccessMode::TrustedEmail => {
+                let entries = match load_pending_trusted_email_access(&state).await {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, err)
+                            .into_response();
+                    }
+                };
+                (Vec::new(), entries)
             }
         }
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
     render_application_access(
+        &state,
         if can_manage_application_access {
             axum::http::StatusCode::OK
         } else {
@@ -204,6 +277,7 @@ pub async fn page(
         csrf_token,
         String::new(),
         pending_invites,
+        pending_trusted_email_access,
         (!can_manage_application_access).then(|| ApplicationAccessError::Forbidden.to_string()),
         None,
     )
@@ -220,154 +294,284 @@ pub async fn create_invite(
 
     if let Err(err) = ensure_bootstrap_admin(&state, &workspace_ctx).await {
         return render_application_access(
+            &state,
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             false,
             csrf_token,
             email,
             Vec::new(),
+            Vec::new(),
             Some(err.to_string()),
             None,
         );
     }
 
-    let pending_invites = match load_pending_invites(&state).await {
-        Ok(invites) => invites,
-        Err(err) => {
-            return render_application_access(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                &workspace_ctx,
-                true,
-                csrf_token,
-                email,
-                Vec::new(),
-                Some(err),
-                None,
-            );
-        }
-    };
-
     if !is_valid_email(&email) {
+        let pending_invites = if matches!(state.application_access_mode, ApplicationAccessMode::EmailInvite) {
+            load_pending_invites(&state).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let pending_trusted_email_access =
+            if matches!(state.application_access_mode, ApplicationAccessMode::TrustedEmail) {
+                load_pending_trusted_email_access(&state)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         return render_application_access(
+            &state,
             axum::http::StatusCode::BAD_REQUEST,
             &workspace_ctx,
             true,
             csrf_token,
             email,
             pending_invites,
+            pending_trusted_email_access,
             Some(ApplicationAccessError::InvalidEmail.to_string()),
             None,
         );
     }
 
-    if pending_invites.iter().any(|invite| invite.email == email) {
-        return render_application_access(
-            axum::http::StatusCode::CONFLICT,
-            &workspace_ctx,
-            true,
-            csrf_token,
-            email,
-            pending_invites,
-            Some(ApplicationAccessError::DuplicateInvite.to_string()),
-            None,
-        );
-    }
+    match state.application_access_mode {
+        ApplicationAccessMode::EmailInvite => {
+            let pending_invites = match load_pending_invites(&state).await {
+                Ok(invites) => invites,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        email,
+                        Vec::new(),
+                        Vec::new(),
+                        Some(err),
+                        None,
+                    );
+                }
+            };
 
-    let raw_token = generate_invite_token();
-    let invite = ApplicationAccessInvite {
-        id: ApplicationAccessInviteId::new(),
-        email: email.clone(),
-        token_hash: hash_invite_token(&raw_token),
-        expires_at: invite_expiration(),
-        accepted_at: None,
-        revoked_at: None,
-        created_by_user_id: workspace_ctx.user.id.clone(),
-        created_at: Utc::now(),
-    };
-
-    if let Err(err) = state.application_access_repo.create_invite(&invite).await {
-        return render_application_access(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            &workspace_ctx,
-            true,
-            csrf_token,
-            email,
-            pending_invites,
-            Some(format!("Nie udało się utworzyć zaproszenia: {err}")),
-            None,
-        );
-    }
-
-    let invite_email = ApplicationAccessInviteEmail {
-        recipient_email: invite.email.clone(),
-        inviter_email: workspace_ctx.user.email.clone(),
-        invite_url: invite_url(&state.public_base_url, &raw_token),
-    };
-
-    if let Err(err) =
-        dispatch_application_access_invite(state.email_sender.clone(), invite_email).await
-    {
-        let _ = state
-            .application_access_repo
-            .revoke_invite(&invite.id)
-            .await;
-        let pending_invites = match load_pending_invites(&state).await {
-            Ok(invites) => invites,
-            Err(load_err) => {
+            if pending_invites.iter().any(|invite| invite.email == email) {
                 return render_application_access(
+                    &state,
+                    axum::http::StatusCode::CONFLICT,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    email,
+                    pending_invites,
+                    Vec::new(),
+                    Some(ApplicationAccessError::DuplicateInvite.to_string()),
+                    None,
+                );
+            }
+
+            let raw_token = generate_invite_token();
+            let invite = ApplicationAccessInvite {
+                id: ApplicationAccessInviteId::new(),
+                email: email.clone(),
+                token_hash: hash_invite_token(&raw_token),
+                expires_at: invite_expiration(),
+                accepted_at: None,
+                revoked_at: None,
+                created_by_user_id: workspace_ctx.user.id.clone(),
+                created_at: Utc::now(),
+            };
+
+            if let Err(err) = state.application_access_repo.create_invite(&invite).await {
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    email,
+                    pending_invites,
+                    Vec::new(),
+                    Some(format!("Nie udało się utworzyć zaproszenia: {err}")),
+                    None,
+                );
+            }
+
+            let invite_email = ApplicationAccessInviteEmail {
+                recipient_email: invite.email.clone(),
+                inviter_email: workspace_ctx.user.email.clone(),
+                invite_url: invite_url(&state.public_base_url, &raw_token),
+            };
+
+            if let Err(err) =
+                dispatch_application_access_invite(state.email_sender.clone(), invite_email).await
+            {
+                let _ = state.application_access_repo.revoke_invite(&invite.id).await;
+                let pending_invites = match load_pending_invites(&state).await {
+                    Ok(invites) => invites,
+                    Err(load_err) => {
+                        return render_application_access(
+                            &state,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            &workspace_ctx,
+                            true,
+                            csrf_token,
+                            email,
+                            Vec::new(),
+                            Vec::new(),
+                            Some(format!(
+                                "Nie udało się wysłać zaproszenia email: {err}. Dodatkowo nie udało się odświeżyć listy zaproszeń: {load_err}"
+                            )),
+                            None,
+                        );
+                    }
+                };
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    email,
+                    pending_invites,
+                    Vec::new(),
+                    Some(format!("Nie udało się wysłać zaproszenia email: {err}")),
+                    None,
+                );
+            }
+
+            let pending_invites = match load_pending_invites(&state).await {
+                Ok(invites) => invites,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Some(err),
+                        None,
+                    );
+                }
+            };
+            render_application_access(
+                &state,
+                axum::http::StatusCode::OK,
+                &workspace_ctx,
+                true,
+                csrf_token,
+                String::new(),
+                pending_invites,
+                Vec::new(),
+                None,
+                Some(format!("Wysłano email z dostępem do aplikacji dla {}.", invite.email)),
+            )
+        }
+        ApplicationAccessMode::TrustedEmail => {
+            let pending_trusted_email_access = match load_pending_trusted_email_access(&state).await
+            {
+                Ok(entries) => entries,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        email,
+                        Vec::new(),
+                        Vec::new(),
+                        Some(err),
+                        None,
+                    );
+                }
+            };
+
+            if pending_trusted_email_access
+                .iter()
+                .any(|entry| entry.email == email)
+            {
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::CONFLICT,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    email,
+                    Vec::new(),
+                    pending_trusted_email_access,
+                    Some(ApplicationAccessError::DuplicateTrustedEmailAccess.to_string()),
+                    None,
+                );
+            }
+
+            let access = TrustedApplicationEmailAccess {
+                id: TrustedApplicationEmailAccessId::new(),
+                email: email.clone(),
+                consumed_at: None,
+                revoked_at: None,
+                created_by_user_id: workspace_ctx.user.id.clone(),
+                created_at: Utc::now(),
+            };
+
+            if let Err(err) = state
+                .application_access_repo
+                .create_trusted_email_access(&access)
+                .await
+            {
+                return render_application_access(
+                    &state,
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     &workspace_ctx,
                     true,
                     csrf_token,
                     email,
                     Vec::new(),
-                    Some(format!(
-                        "Nie udało się wysłać zaproszenia email: {err}. Dodatkowo nie udało się odświeżyć listy zaproszeń: {load_err}"
-                    )),
+                    pending_trusted_email_access,
+                    Some(format!("Nie udało się dodać zaufanego maila: {err}")),
                     None,
                 );
             }
-        };
-        return render_application_access(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            &workspace_ctx,
-            true,
-            csrf_token,
-            email,
-            pending_invites,
-            Some(format!("Nie udało się wysłać zaproszenia email: {err}")),
-            None,
-        );
-    }
 
-    let pending_invites = match load_pending_invites(&state).await {
-        Ok(invites) => invites,
-        Err(err) => {
-            return render_application_access(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            let pending_trusted_email_access =
+                match load_pending_trusted_email_access(&state).await {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return render_application_access(
+                            &state,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            &workspace_ctx,
+                            true,
+                            csrf_token,
+                            String::new(),
+                            Vec::new(),
+                            Vec::new(),
+                            Some(err),
+                            None,
+                        );
+                    }
+                };
+
+            render_application_access(
+                &state,
+                axum::http::StatusCode::OK,
                 &workspace_ctx,
                 true,
                 csrf_token,
                 String::new(),
                 Vec::new(),
-                Some(err),
+                pending_trusted_email_access,
                 None,
-            );
+                Some(format!(
+                    "Dodano zaufany email {}. Użytkownik może teraz samodzielnie zarejestrować konto bez SMTP i utworzy własny workspace.",
+                    access.email
+                )),
+            )
         }
-    };
-    render_application_access(
-        axum::http::StatusCode::OK,
-        &workspace_ctx,
-        true,
-        csrf_token,
-        String::new(),
-        pending_invites,
-        None,
-        Some(format!(
-            "Wysłano email z dostępem do aplikacji dla {}.",
-            invite.email
-        )),
-    )
+    }
 }
 
 pub async fn revoke_invite(
@@ -381,120 +585,261 @@ pub async fn revoke_invite(
 
     if let Err(err) = ensure_bootstrap_admin(&state, &workspace_ctx).await {
         return render_application_access(
+            &state,
             axum::http::StatusCode::FORBIDDEN,
             &workspace_ctx,
             false,
             csrf_token,
             String::new(),
             Vec::new(),
+            Vec::new(),
             Some(err.to_string()),
             None,
         );
     }
 
-    let pending_invites = match load_pending_invites(&state).await {
-        Ok(invites) => invites,
-        Err(err) => {
-            return render_application_access(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                &workspace_ctx,
-                true,
-                csrf_token,
-                String::new(),
-                Vec::new(),
-                Some(err),
-                None,
-            );
-        }
-    };
+    match state.application_access_mode {
+        ApplicationAccessMode::EmailInvite => {
+            let pending_invites = match load_pending_invites(&state).await {
+                Ok(invites) => invites,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Some(err),
+                        None,
+                    );
+                }
+            };
 
-    let invite_id: ApplicationAccessInviteId = match invite_id_raw.parse() {
-        Ok(invite_id) => invite_id,
-        Err(_) => {
-            return render_application_access(
-                axum::http::StatusCode::BAD_REQUEST,
+            let invite_id: ApplicationAccessInviteId = match invite_id_raw.parse() {
+                Ok(invite_id) => invite_id,
+                Err(_) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::BAD_REQUEST,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        pending_invites,
+                        Vec::new(),
+                        Some("Nieprawidłowy identyfikator zaproszenia.".to_string()),
+                        None,
+                    );
+                }
+            };
+
+            let pending_for_check = match state.application_access_repo.list_pending_invites().await {
+                Ok(invites) => invites,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        pending_invites,
+                        Vec::new(),
+                        Some(format!("Nie udało się sprawdzić zaproszenia: {err}")),
+                        None,
+                    );
+                }
+            };
+
+            if !pending_for_check.iter().any(|invite| invite.id == invite_id) {
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::NOT_FOUND,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    String::new(),
+                    pending_invites,
+                    Vec::new(),
+                    Some(ApplicationAccessError::InviteNotFound.to_string()),
+                    None,
+                );
+            }
+
+            if let Err(err) = state.application_access_repo.revoke_invite(&invite_id).await {
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    String::new(),
+                    pending_invites,
+                    Vec::new(),
+                    Some(format!("Nie udało się odwołać zaproszenia: {err}")),
+                    None,
+                );
+            }
+
+            let pending_invites = match load_pending_invites(&state).await {
+                Ok(invites) => invites,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Some(err),
+                        None,
+                    );
+                }
+            };
+            render_application_access(
+                &state,
+                axum::http::StatusCode::OK,
                 &workspace_ctx,
                 true,
                 csrf_token,
                 String::new(),
                 pending_invites,
-                Some("Nieprawidłowy identyfikator zaproszenia.".to_string()),
+                Vec::new(),
                 None,
-            );
+                Some("Zaproszenie do aplikacji zostało odwołane.".to_string()),
+            )
         }
-    };
+        ApplicationAccessMode::TrustedEmail => {
+            let pending_trusted_email_access =
+                match load_pending_trusted_email_access(&state).await {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return render_application_access(
+                            &state,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            &workspace_ctx,
+                            true,
+                            csrf_token,
+                            String::new(),
+                            Vec::new(),
+                            Vec::new(),
+                            Some(err),
+                            None,
+                        );
+                    }
+                };
 
-    let pending_for_check = match state.application_access_repo.list_pending_invites().await {
-        Ok(invites) => invites,
-        Err(err) => {
-            return render_application_access(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                &workspace_ctx,
-                true,
-                csrf_token,
-                String::new(),
-                pending_invites,
-                Some(format!("Nie udało się sprawdzić zaproszenia: {err}")),
-                None,
-            );
-        }
-    };
+            let access_id: TrustedApplicationEmailAccessId = match invite_id_raw.parse() {
+                Ok(access_id) => access_id,
+                Err(_) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::BAD_REQUEST,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        Vec::new(),
+                        pending_trusted_email_access,
+                        Some("Nieprawidłowy identyfikator zaufanego maila.".to_string()),
+                        None,
+                    );
+                }
+            };
 
-    if !pending_for_check.iter().any(|invite| invite.id == invite_id) {
-        return render_application_access(
-            axum::http::StatusCode::NOT_FOUND,
-            &workspace_ctx,
-            true,
-            csrf_token,
-            String::new(),
-            pending_invites,
-            Some(ApplicationAccessError::InviteNotFound.to_string()),
-            None,
-        );
-    }
+            let pending_for_check = match state
+                .application_access_repo
+                .list_pending_trusted_email_access()
+                .await
+            {
+                Ok(entries) => entries,
+                Err(err) => {
+                    return render_application_access(
+                        &state,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        &workspace_ctx,
+                        true,
+                        csrf_token,
+                        String::new(),
+                        Vec::new(),
+                        pending_trusted_email_access,
+                        Some(format!("Nie udało się sprawdzić zaufanego maila: {err}")),
+                        None,
+                    );
+                }
+            };
 
-    if let Err(err) = state
-        .application_access_repo
-        .revoke_invite(&invite_id)
-        .await
-    {
-        return render_application_access(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            &workspace_ctx,
-            true,
-            csrf_token,
-            String::new(),
-            pending_invites,
-            Some(format!("Nie udało się odwołać zaproszenia: {err}")),
-            None,
-        );
-    }
+            if !pending_for_check.iter().any(|entry| entry.id == access_id) {
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::NOT_FOUND,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    String::new(),
+                    Vec::new(),
+                    pending_trusted_email_access,
+                    Some(ApplicationAccessError::TrustedEmailAccessNotFound.to_string()),
+                    None,
+                );
+            }
 
-    let pending_invites = match load_pending_invites(&state).await {
-        Ok(invites) => invites,
-        Err(err) => {
-            return render_application_access(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            if let Err(err) = state
+                .application_access_repo
+                .revoke_trusted_email_access(&access_id)
+                .await
+            {
+                return render_application_access(
+                    &state,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &workspace_ctx,
+                    true,
+                    csrf_token,
+                    String::new(),
+                    Vec::new(),
+                    pending_trusted_email_access,
+                    Some(format!("Nie udało się usunąć zaufanego maila: {err}")),
+                    None,
+                );
+            }
+
+            let pending_trusted_email_access =
+                match load_pending_trusted_email_access(&state).await {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return render_application_access(
+                            &state,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            &workspace_ctx,
+                            true,
+                            csrf_token,
+                            String::new(),
+                            Vec::new(),
+                            Vec::new(),
+                            Some(err),
+                            None,
+                        );
+                    }
+                };
+            render_application_access(
+                &state,
+                axum::http::StatusCode::OK,
                 &workspace_ctx,
                 true,
                 csrf_token,
                 String::new(),
                 Vec::new(),
-                Some(err),
+                pending_trusted_email_access,
                 None,
-            );
+                Some("Zaufany email dostępu do aplikacji został usunięty.".to_string()),
+            )
         }
-    };
-    render_application_access(
-        axum::http::StatusCode::OK,
-        &workspace_ctx,
-        true,
-        csrf_token,
-        String::new(),
-        pending_invites,
-        None,
-        Some("Zaproszenie do aplikacji zostało odwołane.".to_string()),
-    )
+    }
 }
 
 #[cfg(test)]
@@ -569,7 +914,11 @@ mod tests {
         }
     }
 
-    async fn test_state(email_sender: Arc<dyn EmailSender>) -> (AppState, std::path::PathBuf) {
+    async fn test_state(
+        email_sender: Arc<dyn EmailSender>,
+        application_access_mode: ApplicationAccessMode,
+        email_delivery_enabled: bool,
+    ) -> (AppState, std::path::PathBuf) {
         let db_path = std::env::temp_dir().join(format!(
             "ksef-server-application-access-test-{}.db",
             uuid::Uuid::new_v4()
@@ -659,6 +1008,8 @@ mod tests {
             auth_rate_limiter: AuthRateLimiter::default(),
             public_base_url: "https://app.example.test".to_string(),
             allowed_emails: vec!["admin@example.com".to_string()],
+            application_access_mode,
+            email_delivery_enabled,
         };
 
         (state, db_path)
@@ -714,7 +1065,12 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_admin_can_create_application_access_invite() {
         let sender = Arc::new(RecordingEmailSender::default());
-        let (state, db_path) = test_state(sender.clone()).await;
+        let (state, db_path) = test_state(
+            sender.clone(),
+            ApplicationAccessMode::EmailInvite,
+            true,
+        )
+        .await;
         let admin = make_user("admin@example.com");
         state.user_repo.create(&admin).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &admin).await;
@@ -753,7 +1109,7 @@ mod tests {
     #[tokio::test]
     async fn non_bootstrap_user_sees_rendered_forbidden_page() {
         let sender = Arc::new(RecordingEmailSender::default());
-        let (state, db_path) = test_state(sender).await;
+        let (state, db_path) = test_state(sender, ApplicationAccessMode::EmailInvite, true).await;
         let user = make_user("user@example.com");
         state.user_repo.create(&user).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &user).await;
@@ -776,7 +1132,7 @@ mod tests {
     #[tokio::test]
     async fn non_bootstrap_user_cannot_create_application_access_invite() {
         let sender = Arc::new(RecordingEmailSender::default());
-        let (state, db_path) = test_state(sender).await;
+        let (state, db_path) = test_state(sender, ApplicationAccessMode::EmailInvite, true).await;
         let user = make_user("user@example.com");
         state.user_repo.create(&user).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &user).await;
@@ -805,7 +1161,12 @@ mod tests {
     #[tokio::test]
     async fn expired_application_access_invite_does_not_block_resend() {
         let sender = Arc::new(RecordingEmailSender::default());
-        let (state, db_path) = test_state(sender.clone()).await;
+        let (state, db_path) = test_state(
+            sender.clone(),
+            ApplicationAccessMode::EmailInvite,
+            true,
+        )
+        .await;
         let admin = make_user("admin@example.com");
         state.user_repo.create(&admin).await.unwrap();
         let workspace_ctx = workspace_ctx(&state, &admin).await;
@@ -843,6 +1204,39 @@ mod tests {
             .unwrap();
         assert_eq!(invites.len(), 1);
         assert_eq!(invites[0].email, "expired.user@example.com");
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_admin_can_add_trusted_email_without_smtp() {
+        let sender = Arc::new(RecordingEmailSender::default());
+        let (state, db_path) =
+            test_state(sender, ApplicationAccessMode::TrustedEmail, false).await;
+        let admin = make_user("admin@example.com");
+        state.user_repo.create(&admin).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &admin).await;
+
+        let response = create_invite(
+            State(state.clone()),
+            workspace_ctx,
+            session_with_csrf("csrf").await,
+            CsrfForm(CreateApplicationAccessInviteFormData {
+                email: "trusted.user@example.com".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("Dodano zaufany email trusted.user@example.com"));
+        let entries = state
+            .application_access_repo
+            .list_pending_trusted_email_access()
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].email, "trusted.user@example.com");
 
         let _ = std::fs::remove_file(db_path);
     }

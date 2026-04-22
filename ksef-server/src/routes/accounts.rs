@@ -1145,6 +1145,8 @@ mod tests {
             auth_rate_limiter: AuthRateLimiter::default(),
             public_base_url: "https://app.example.test".to_string(),
             allowed_emails: Vec::new(),
+            application_access_mode: crate::state::ApplicationAccessMode::EmailInvite,
+            email_delivery_enabled: false,
         };
 
         (state, pool, db_path)

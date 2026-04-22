@@ -11,7 +11,9 @@ use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
-use ksef_core::domain::application_access::ApplicationAccessInvite;
+use ksef_core::domain::application_access::{
+    ApplicationAccessInvite, TrustedApplicationEmailAccess,
+};
 use ksef_core::domain::audit::AuditAction;
 use ksef_core::domain::user::{User, UserId};
 use ksef_core::domain::workspace::WorkspaceInvite;
@@ -25,7 +27,7 @@ use crate::audit_log::log_action as log_audit_action;
 use crate::csrf::ensure_csrf_token;
 use crate::extractors::{CURRENT_WORKSPACE_SESSION_KEY, CsrfForm};
 use crate::request_meta::client_ip;
-use crate::state::AppState;
+use crate::state::{AppState, ApplicationAccessMode};
 use crate::workspace_invites::{
     InviteResolutionError, require_invite_email, resolve_pending_invite,
 };
@@ -91,12 +93,15 @@ enum RegistrationGateError {
     WorkspaceInvite(#[from] InviteResolutionError),
     #[error(transparent)]
     ApplicationAccessInvite(#[from] ApplicationAccessInviteResolutionError),
+    #[error("trusted application access repository error: {0}")]
+    TrustedApplicationAccess(#[from] RepositoryError),
 }
 
 enum RegistrationAuthorization {
     BootstrapAdmin,
     WorkspaceInvite(WorkspaceInvite),
     ApplicationAccessInvite(ApplicationAccessInvite),
+    TrustedEmailAccess(TrustedApplicationEmailAccess),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -236,6 +241,17 @@ fn auth_extra_info(kind: InviteKind, action: &str) -> Option<String> {
     }
 }
 
+fn registration_closed_message(state: &AppState) -> String {
+    match state.application_access_mode {
+        ApplicationAccessMode::EmailInvite => {
+            "Rejestracja jest zamknięta. Poproś bootstrap administratora o zaproszenie do aplikacji albo administratora workspace o zaproszenie do współdzielonego workspace.".to_string()
+        }
+        ApplicationAccessMode::TrustedEmail => {
+            "Rejestracja jest zamknięta. Poproś bootstrap administratora o dodanie Twojego emaila do zaufanych adresów rejestracji albo administratora workspace o zaproszenie do współdzielonego workspace.".to_string()
+        }
+    }
+}
+
 fn render_login_template(
     status: StatusCode,
     error: Option<String>,
@@ -322,6 +338,23 @@ async fn application_access_invite_message(
     )
 }
 
+async fn trusted_email_access_message(
+    state: &AppState,
+    access: &TrustedApplicationEmailAccess,
+) -> String {
+    let approver = state
+        .user_repo
+        .find_by_id(&access.created_by_user_id)
+        .await
+        .map(|user| user.email)
+        .unwrap_or_else(|_| access.created_by_user_id.to_string());
+
+    format!(
+        "Email {} został wcześniej dodany jako zaufany adres rejestracji. Po założeniu konta użytkownik uzyska dostęp do aplikacji i utworzy własny, niezależny workspace. Dodał: {}.",
+        access.email, approver
+    )
+}
+
 async fn invite_page_context(
     state: &AppState,
     tokens: &InviteTokens,
@@ -385,6 +418,15 @@ async fn resolve_registration_authorization(
         InviteKind::None => {
             if state.allowed_emails.contains(&email.to_lowercase()) {
                 Ok(RegistrationAuthorization::BootstrapAdmin)
+            } else if matches!(state.application_access_mode, ApplicationAccessMode::TrustedEmail) {
+                match state
+                    .application_access_repo
+                    .find_pending_trusted_email_access_by_email(email)
+                    .await?
+                {
+                    Some(access) => Ok(RegistrationAuthorization::TrustedEmailAccess(access)),
+                    None => Err(RegistrationGateError::Closed),
+                }
             } else {
                 Err(RegistrationGateError::Closed)
             }
@@ -423,6 +465,18 @@ async fn apply_application_access_invite(
     let workspace = state
         .application_access_repo
         .activate_application_access(&invite.id, &user.id, &user.email)
+        .await?;
+    Ok(workspace.workspace.id)
+}
+
+async fn apply_trusted_email_access(
+    state: &AppState,
+    user: &User,
+    access: &TrustedApplicationEmailAccess,
+) -> Result<ksef_core::domain::workspace::WorkspaceId, RepositoryError> {
+    let workspace = state
+        .application_access_repo
+        .activate_trusted_email_access(&access.id, &user.id, &user.email)
         .await?;
     Ok(workspace.workspace.id)
 }
@@ -882,10 +936,7 @@ pub async fn register(
         Err(RegistrationGateError::Closed) => {
             return render_register_template(
                 StatusCode::FORBIDDEN,
-                Some(
-                    "Rejestracja jest zamknięta. Poproś administratora o zaproszenie do aplikacji albo administratora workspace o zaproszenie do współdzielonego workspace."
-                        .to_string(),
-                ),
+                Some(registration_closed_message(&state)),
                 email,
                 csrf_token,
                 tokens,
@@ -906,6 +957,16 @@ pub async fn register(
             return render_register_template(
                 StatusCode::FORBIDDEN,
                 Some(format!("Zaproszenie jest nieprawidłowe: {err}")),
+                email,
+                csrf_token,
+                tokens,
+                None,
+            );
+        }
+        Err(RegistrationGateError::TrustedApplicationAccess(err)) => {
+            return render_register_template(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Some(format!("Nie udało się sprawdzić dostępu do aplikacji: {err}")),
                 email,
                 csrf_token,
                 tokens,
@@ -1053,6 +1114,22 @@ pub async fn register(
                 }
             }
         }
+        RegistrationAuthorization::TrustedEmailAccess(access) => {
+            let access_info = trusted_email_access_message(&state, &access).await;
+            match apply_trusted_email_access(&state, &user, &access).await {
+                Ok(workspace_id) => workspace_id,
+                Err(e) => {
+                    return render_register_template(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some(format!("Nie udało się aktywować dostępu do aplikacji: {e}")),
+                        email,
+                        csrf_token,
+                        tokens,
+                        Some(access_info),
+                    );
+                }
+            }
+        }
     };
 
     if let Err(e) = persist_authenticated_session(&session, &user.id, &workspace_id).await {
@@ -1126,7 +1203,11 @@ mod tests {
     use crate::invite_tokens::hash_invite_token;
     use chrono::Duration;
 
-    async fn test_state(allowed_emails: Vec<String>) -> (AppState, std::path::PathBuf) {
+    async fn test_state(
+        allowed_emails: Vec<String>,
+        application_access_mode: ApplicationAccessMode,
+        email_delivery_enabled: bool,
+    ) -> (AppState, std::path::PathBuf) {
         let db_path =
             std::env::temp_dir().join(format!("ksef-server-auth-test-{}.db", uuid::Uuid::new_v4()));
         let database_url = format!("sqlite://{}", db_path.display());
@@ -1214,6 +1295,8 @@ mod tests {
             auth_rate_limiter: AuthRateLimiter::default(),
             public_base_url: "https://app.example.test".to_string(),
             allowed_emails,
+            application_access_mode,
+            email_delivery_enabled,
         };
 
         (state, db_path)
@@ -1306,9 +1389,25 @@ mod tests {
             .unwrap();
     }
 
+    async fn create_trusted_email_access(state: &AppState, inviter: &User, invited_email: &str) {
+        state
+            .application_access_repo
+            .create_trusted_email_access(&TrustedApplicationEmailAccess {
+                id: ksef_core::domain::application_access::TrustedApplicationEmailAccessId::new(),
+                email: invited_email.to_string(),
+                consumed_at: None,
+                revoked_at: None,
+                created_by_user_id: inviter.id.clone(),
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn register_requires_invite_when_email_is_not_bootstrap_admin() {
-        let (state, db_path) = test_state(Vec::new()).await;
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::EmailInvite, true).await;
 
         let response = register(
             State(state),
@@ -1333,7 +1432,12 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_admin_registration_creates_workspace() {
-        let (state, db_path) = test_state(vec!["admin@example.com".to_string()]).await;
+        let (state, db_path) = test_state(
+            vec!["admin@example.com".to_string()],
+            ApplicationAccessMode::EmailInvite,
+            true,
+        )
+        .await;
 
         let response = register(
             State(state.clone()),
@@ -1365,7 +1469,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_valid_workspace_invite_creates_membership() {
-        let (state, db_path) = test_state(Vec::new()).await;
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::EmailInvite, true).await;
         let owner = make_user("owner@example.com", "OwnerPass1!");
         state.user_repo.create(&owner).await.unwrap();
         let raw_token = "invite.register.token";
@@ -1413,7 +1518,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_application_access_invite_creates_independent_workspace() {
-        let (state, db_path) = test_state(Vec::new()).await;
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::EmailInvite, true).await;
         let inviter = make_user("admin@example.com", "AdminPass1!");
         state.user_repo.create(&inviter).await.unwrap();
         let inviter_workspace = state
@@ -1462,8 +1568,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn register_with_trusted_email_access_creates_independent_workspace() {
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::TrustedEmail, false).await;
+        let inviter = make_user("admin@example.com", "AdminPass1!");
+        state.user_repo.create(&inviter).await.unwrap();
+        create_trusted_email_access(&state, &inviter, "trusted.user@example.com").await;
+
+        let response = register(
+            State(state.clone()),
+            session_with_csrf("csrf").await,
+            HeaderMap::new(),
+            CsrfForm(RegisterFormData {
+                email: "trusted.user@example.com".to_string(),
+                password: "Passw0rd!".to_string(),
+                password_confirm: "Passw0rd!".to_string(),
+                workspace_invite_token: None,
+                app_access_invite_token: None,
+            }),
+        )
+        .await;
+
+        assert!(response.status().is_redirection());
+        let user = state
+            .user_repo
+            .find_by_email("trusted.user@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let workspaces = state.workspace_repo.list_for_user(&user.id).await.unwrap();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].membership.role, WorkspaceRole::Owner);
+        let pending = state
+            .application_access_repo
+            .find_pending_trusted_email_access_by_email("trusted.user@example.com")
+            .await
+            .unwrap();
+        assert!(pending.is_none());
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
     async fn login_with_valid_workspace_invite_grants_existing_user_membership() {
-        let (state, db_path) = test_state(Vec::new()).await;
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::EmailInvite, true).await;
         let owner = make_user("owner@example.com", "OwnerPass1!");
         state.user_repo.create(&owner).await.unwrap();
         let invited = make_user("existing.user@example.com", "Passw0rd!");
@@ -1505,7 +1654,8 @@ mod tests {
 
     #[tokio::test]
     async fn login_with_invalid_invite_does_not_create_session() {
-        let (state, db_path) = test_state(Vec::new()).await;
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::EmailInvite, true).await;
         let user = make_user("existing.user@example.com", "Passw0rd!");
         state.user_repo.create(&user).await.unwrap();
         let session = session_with_csrf("csrf").await;
@@ -1538,7 +1688,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_page_with_invite_and_active_other_session_shows_conflict() {
-        let (state, db_path) = test_state(Vec::new()).await;
+        let (state, db_path) =
+            test_state(Vec::new(), ApplicationAccessMode::EmailInvite, true).await;
         let active_user = make_user("active@example.com", "Passw0rd!");
         state.user_repo.create(&active_user).await.unwrap();
         let inviter = make_user("owner@example.com", "OwnerPass1!");
