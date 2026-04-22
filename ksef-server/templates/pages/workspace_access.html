@@ -1,0 +1,79 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Dostęp Workspace - KSeF Pay</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>Dostęp Workspace</h1>
+    <p class="page-copy">Zarządzasz dostępem do workspace <strong>{{ current_workspace_name }}</strong>.</p>
+  </div>
+
+  {% if let Some(msg) = error %}
+  <div class="alert alert-error">{{ msg }}</div>
+  {% endif %}
+
+  {% if let Some(msg) = success %}
+  <div class="alert alert-success">{{ msg }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Nowe zaproszenie</h2>
+    <form method="post" action="/workspaces/invites" class="stack-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+      <div class="form-row">
+        <label for="email">Email użytkownika</label>
+        <input type="email" id="email" name="email" value="{{ invite_email }}" placeholder="user@example.com" required />
+      </div>
+      <div class="form-row">
+        <label for="role">Rola</label>
+        <select id="role" name="role">
+          <option value="admin"{% if selected_role == "admin" %} selected{% endif %}>Admin</option>
+          <option value="operator"{% if selected_role == "operator" %} selected{% endif %}>Operator</option>
+          <option value="read_only"{% if selected_role == "read_only" %} selected{% endif %}>Read only</option>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Utwórz zaproszenie</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Oczekujące zaproszenia</h2>
+    {% if pending_invites.is_empty() %}
+    <p class="page-copy">Brak oczekujących zaproszeń.</p>
+    {% else %}
+    <div class="table-wrap">
+      <table class="invoice-table">
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Rola</th>
+            <th>Ważne do</th>
+            <th>Akcje</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for invite in pending_invites %}
+          <tr>
+            <td>{{ invite.email }}</td>
+            <td>{{ invite.role_label }}</td>
+            <td>{{ invite.expires_at }}</td>
+            <td>
+              <form method="post" action="/workspaces/invites/{{ invite.id }}/revoke" class="inline-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+                <button type="submit" class="btn btn-secondary btn-sm">Odwołaj</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

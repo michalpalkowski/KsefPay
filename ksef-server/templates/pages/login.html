@@ -17,8 +17,15 @@
   <div class="alert alert-error">{{ msg }}</div>
   {% endif %}
 
+  {% if let Some(msg) = invite_message %}
+  <div class="alert alert-info">{{ msg }}</div>
+  {% endif %}
+
   <form method="post" action="/login" class="auth-form">
     <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+    {% if !invite_token.is_empty() %}
+    <input type="hidden" name="invite_token" value="{{ invite_token }}" />
+    {% endif %}
     <div class="form-group">
       <label for="email">Email</label>
       <input type="email" name="email" id="email" value="{{ email }}"
@@ -36,7 +43,7 @@
   </form>
 
   <p class="page-copy" style="margin-top: 1rem; text-align: center;">
-    Nie masz konta? <a href="/register">Zarejestruj się</a>
+    Nie masz konta? <a href="{{ register_href }}">Zarejestruj się</a>
   </p>
 </div>
 {% endblock %}

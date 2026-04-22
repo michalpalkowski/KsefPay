@@ -15,6 +15,7 @@ mod permissions;
 mod profile;
 mod sessions;
 mod tokens;
+mod workspaces;
 
 use crate::state::AppState;
 
@@ -33,6 +34,13 @@ pub fn router() -> Router<AppState> {
         .route("/profile/password", post(profile::change_password))
         .route("/accounts", get(accounts::list))
         .route("/accounts/add", get(accounts::add_form).post(accounts::add))
+        .route("/workspaces/access", get(workspaces::access_page))
+        .route("/workspaces/select", post(workspaces::select))
+        .route("/workspaces/invites", post(workspaces::create_invite))
+        .route(
+            "/workspaces/invites/{invite_id}/revoke",
+            post(workspaces::revoke_invite),
+        )
         .route(
             "/accounts/{nip}/certificate",
             get(accounts::certificate_form).post(accounts::certificate_save),

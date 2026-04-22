@@ -8,14 +8,36 @@
 <div class="page-card">
   <div class="page-header">
     <h1>Konta NIP</h1>
+    <p class="page-copy">Aktywny workspace: <strong>{{ current_workspace_name }}</strong></p>
     <div class="header-actions">
       <a href="/accounts/add" class="btn btn-primary">Dodaj konto NIP</a>
     </div>
   </div>
 
+  <div class="card">
+    <h2>Workspace</h2>
+    <form method="post" action="/workspaces/select" class="inline-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+      <input type="hidden" name="return_to" value="/accounts" />
+      <div class="form-row">
+        <label for="workspace_id">Przełącz workspace</label>
+        <select name="workspace_id" id="workspace_id">
+          {% for workspace in workspaces %}
+          <option value="{{ workspace.id }}"{% if workspace.is_current %} selected{% endif %}>
+            {{ workspace.display_name }} ({{ workspace.role_label }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-secondary">Przełącz</button>
+      </div>
+    </form>
+  </div>
+
   {% if accounts.is_empty() %}
   <div class="empty-state">
-    <p>Brak kont NIP. Dodaj swoje pierwsze konto NIP aby rozpoczac prace z KSeF.</p>
+    <p>Brak kont NIP w tym workspace. Dodaj pierwsze konto NIP aby rozpoczac prace z KSeF.</p>
     <a href="/accounts/add" class="btn btn-primary">Dodaj konto NIP</a>
   </div>
   {% else %}
