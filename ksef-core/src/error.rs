@@ -249,6 +249,9 @@ pub enum RepositoryError {
     #[error("duplicate entity: {entity} with key {key}")]
     Duplicate { entity: &'static str, key: String },
 
+    #[error("storage error: {0}")]
+    Storage(String),
+
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 }
@@ -339,6 +342,12 @@ mod tests {
             err.to_string(),
             "duplicate entity: Invoice with key KSEF-123"
         );
+    }
+
+    #[test]
+    fn repository_error_display_storage() {
+        let err = RepositoryError::Storage("decrypt failed".to_string());
+        assert_eq!(err.to_string(), "storage error: decrypt failed");
     }
 
     #[test]

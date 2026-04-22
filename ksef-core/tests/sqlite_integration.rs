@@ -877,8 +877,8 @@ async fn access_grant_and_list_by_user() {
     let acc2 = make_nip_account(&other_nip());
     let acc2_id = NipAccountRepository::create(&db, &acc2).await.unwrap();
 
-    db.grant_access(&user_id, &acc1_id).await.unwrap();
-    db.grant_access(&user_id, &acc2_id).await.unwrap();
+    db.grant_access(&user_id, &acc1_id, true).await.unwrap();
+    db.grant_access(&user_id, &acc2_id, true).await.unwrap();
 
     let accounts = db.list_by_user(&user_id).await.unwrap();
     assert_eq!(accounts.len(), 2);
@@ -894,7 +894,7 @@ async fn access_has_access_returns_account_when_granted() {
 
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
-    db.grant_access(&user_id, &acc_id).await.unwrap();
+    db.grant_access(&user_id, &acc_id, true).await.unwrap();
 
     let result = db.verify_access(&user_id, &test_nip()).await.unwrap();
     assert!(result.is_some());
@@ -927,7 +927,7 @@ async fn access_revoke_removes_access() {
 
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
-    db.grant_access(&user_id, &acc_id).await.unwrap();
+    db.grant_access(&user_id, &acc_id, true).await.unwrap();
 
     // Verify access exists
     assert!(
@@ -965,7 +965,7 @@ async fn access_isolation_between_users() {
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
 
     // Only Alice gets access
-    db.grant_access(&alice_id, &acc_id).await.unwrap();
+    db.grant_access(&alice_id, &acc_id, true).await.unwrap();
 
     assert!(
         db.verify_access(&alice_id, &test_nip())
@@ -997,8 +997,8 @@ async fn access_multiple_users_same_nip() {
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
 
-    db.grant_access(&alice_id, &acc_id).await.unwrap();
-    db.grant_access(&bob_id, &acc_id).await.unwrap();
+    db.grant_access(&alice_id, &acc_id, true).await.unwrap();
+    db.grant_access(&bob_id, &acc_id, true).await.unwrap();
 
     // Both have access
     assert!(
@@ -1012,6 +1012,45 @@ async fn access_multiple_users_same_nip() {
             .await
             .unwrap()
             .is_some()
+    );
+
+    assert!(db.can_manage_credentials(&alice_id, &acc_id).await.unwrap());
+    assert!(db.can_manage_credentials(&bob_id, &acc_id).await.unwrap());
+}
+
+#[tokio::test]
+async fn access_can_disable_credential_management_per_user() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let owner = make_user("owner@x.pl");
+    let owner_id = UserRepository::create(&db, &owner).await.unwrap();
+    let operator = make_user("operator@x.pl");
+    let operator_id = UserRepository::create(&db, &operator).await.unwrap();
+
+    let acc = make_nip_account(&test_nip());
+    let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
+
+    db.grant_access(&owner_id, &acc_id, true).await.unwrap();
+    db.grant_access(&operator_id, &acc_id, false).await.unwrap();
+
+    assert!(
+        db.verify_access(&owner_id, &test_nip())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        db.verify_access(&operator_id, &test_nip())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(db.can_manage_credentials(&owner_id, &acc_id).await.unwrap());
+    assert!(
+        !db.can_manage_credentials(&operator_id, &acc_id)
+            .await
+            .unwrap()
     );
 }
 

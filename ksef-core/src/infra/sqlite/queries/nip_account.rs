@@ -6,6 +6,7 @@ use crate::domain::nip::Nip;
 use crate::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use crate::domain::user::UserId;
 use crate::error::RepositoryError;
+use crate::infra::crypto::CertificateSecretBox;
 
 #[derive(sqlx::FromRow)]
 pub(crate) struct NipAccountRow {
@@ -37,7 +38,10 @@ fn decode_nip(s: &str) -> Result<Nip, RepositoryError> {
 }
 
 impl NipAccountRow {
-    pub(crate) fn into_domain(self) -> Result<NipAccount, RepositoryError> {
+    pub(crate) fn into_domain(
+        self,
+        certificate_secret_box: &CertificateSecretBox,
+    ) -> Result<NipAccount, RepositoryError> {
         let id = uuid::Uuid::parse_str(&self.id)
             .map_err(|e| decode_err(format!("invalid nip_account id '{}': {e}", self.id)))?;
 
@@ -46,8 +50,8 @@ impl NipAccountRow {
             .parse()
             .map_err(|e: String| decode_err(e))?;
 
-        let cert_pem = self.cert_pem.map(|s| s.into_bytes());
-        let key_pem = self.key_pem.map(|s| s.into_bytes());
+        let cert_pem = decode_secret(self.cert_pem, certificate_secret_box, "cert_pem")?;
+        let key_pem = decode_secret(self.key_pem, certificate_secret_box, "key_pem")?;
 
         Ok(NipAccount {
             id: NipAccountId::from_uuid(id),
@@ -64,23 +68,42 @@ impl NipAccountRow {
     }
 }
 
+fn encode_secret(
+    secret: &Option<Vec<u8>>,
+    certificate_secret_box: &CertificateSecretBox,
+    field: &'static str,
+) -> Result<Option<String>, RepositoryError> {
+    secret
+        .as_ref()
+        .map(|bytes| {
+            certificate_secret_box
+                .encrypt(bytes)
+                .map_err(|e| RepositoryError::Storage(format!("{field}: {e}")))
+        })
+        .transpose()
+}
+
+fn decode_secret(
+    secret: Option<String>,
+    certificate_secret_box: &CertificateSecretBox,
+    field: &'static str,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    secret
+        .map(|value| {
+            certificate_secret_box
+                .decrypt_or_plaintext(&value)
+                .map_err(|e| RepositoryError::Storage(format!("{field}: {e}")))
+        })
+        .transpose()
+}
+
 pub async fn create<'e>(
     exec: impl SqliteExecutor<'e>,
     account: &NipAccount,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<NipAccountId, RepositoryError> {
-    let cert_pem = account
-        .cert_pem
-        .as_ref()
-        .map(|b| String::from_utf8(b.clone()))
-        .transpose()
-        .map_err(|e| decode_err(format!("cert_pem is not valid UTF-8: {e}")))?;
-
-    let key_pem = account
-        .key_pem
-        .as_ref()
-        .map(|b| String::from_utf8(b.clone()))
-        .transpose()
-        .map_err(|e| decode_err(format!("key_pem is not valid UTF-8: {e}")))?;
+    let cert_pem = encode_secret(&account.cert_pem, certificate_secret_box, "cert_pem")?;
+    let key_pem = encode_secret(&account.key_pem, certificate_secret_box, "key_pem")?;
 
     sqlx::query(
         r"INSERT INTO nip_accounts (
@@ -116,6 +139,7 @@ pub async fn create<'e>(
 pub async fn find_by_id<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &NipAccountId,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<NipAccount, RepositoryError> {
     let row: NipAccountRow = sqlx::query_as("SELECT * FROM nip_accounts WHERE id = ?1")
         .bind(id.to_string())
@@ -125,37 +149,29 @@ pub async fn find_by_id<'e>(
             entity: "NipAccount",
             id: id.to_string(),
         })?;
-    row.into_domain()
+    row.into_domain(certificate_secret_box)
 }
 
 pub async fn find_by_nip<'e>(
     exec: impl SqliteExecutor<'e>,
     nip: &Nip,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Option<NipAccount>, RepositoryError> {
     let row: Option<NipAccountRow> = sqlx::query_as("SELECT * FROM nip_accounts WHERE nip = ?1")
         .bind(nip.as_str())
         .fetch_optional(exec)
         .await?;
-    row.map(NipAccountRow::into_domain).transpose()
+    row.map(|row| row.into_domain(certificate_secret_box))
+        .transpose()
 }
 
 pub async fn update_credentials<'e>(
     exec: impl SqliteExecutor<'e>,
     account: &NipAccount,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<(), RepositoryError> {
-    let cert_pem = account
-        .cert_pem
-        .as_ref()
-        .map(|b| String::from_utf8(b.clone()))
-        .transpose()
-        .map_err(|e| decode_err(format!("cert_pem is not valid UTF-8: {e}")))?;
-
-    let key_pem = account
-        .key_pem
-        .as_ref()
-        .map(|b| String::from_utf8(b.clone()))
-        .transpose()
-        .map_err(|e| decode_err(format!("key_pem is not valid UTF-8: {e}")))?;
+    let cert_pem = encode_secret(&account.cert_pem, certificate_secret_box, "cert_pem")?;
+    let key_pem = encode_secret(&account.key_pem, certificate_secret_box, "key_pem")?;
 
     let result = sqlx::query(
         r"UPDATE nip_accounts SET
@@ -189,21 +205,28 @@ pub async fn grant_access<'e>(
     exec: impl SqliteExecutor<'e>,
     user_id: &UserId,
     account_id: &NipAccountId,
+    can_manage_credentials: bool,
 ) -> Result<(), RepositoryError> {
-    sqlx::query(r"INSERT INTO user_nip_access (user_id, nip_account_id) VALUES (?1, ?2)")
-        .bind(user_id.to_string())
-        .bind(account_id.to_string())
-        .execute(exec)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
-                RepositoryError::Duplicate {
-                    entity: "UserNipAccess",
-                    key: format!("{}:{}", user_id, account_id),
-                }
+    sqlx::query(
+        r"INSERT INTO user_nip_access (user_id, nip_account_id, can_manage_credentials)
+          VALUES (?1, ?2, ?3)
+          ON CONFLICT(user_id, nip_account_id) DO UPDATE SET
+            can_manage_credentials = excluded.can_manage_credentials",
+    )
+    .bind(user_id.to_string())
+    .bind(account_id.to_string())
+    .bind(i32::from(can_manage_credentials))
+    .execute(exec)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+            RepositoryError::Duplicate {
+                entity: "UserNipAccess",
+                key: format!("{}:{}", user_id, account_id),
             }
-            _ => RepositoryError::Database(e),
-        })?;
+        }
+        _ => RepositoryError::Database(e),
+    })?;
 
     Ok(())
 }
@@ -232,6 +255,7 @@ pub async fn revoke_access<'e>(
 pub async fn list_by_user<'e>(
     exec: impl SqliteExecutor<'e>,
     user_id: &UserId,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Vec<NipAccount>, RepositoryError> {
     let rows: Vec<NipAccountRow> = sqlx::query_as(
         r"SELECT na.* FROM nip_accounts na
@@ -243,13 +267,16 @@ pub async fn list_by_user<'e>(
     .fetch_all(exec)
     .await?;
 
-    rows.into_iter().map(NipAccountRow::into_domain).collect()
+    rows.into_iter()
+        .map(|row| row.into_domain(certificate_secret_box))
+        .collect()
 }
 
 pub async fn verify_access<'e>(
     exec: impl SqliteExecutor<'e>,
     user_id: &UserId,
     nip: &Nip,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
     let row: Option<NipAccountRow> = sqlx::query_as(
         r"SELECT na.* FROM nip_accounts na
@@ -262,9 +289,27 @@ pub async fn verify_access<'e>(
     .await?;
 
     row.map(|r| {
-        let account = r.into_domain()?;
+        let account = r.into_domain(certificate_secret_box)?;
         let scope = AccountScope::new(account.id.clone(), account.nip.clone());
         Ok((account, scope))
     })
     .transpose()
+}
+
+pub async fn can_manage_credentials<'e>(
+    exec: impl SqliteExecutor<'e>,
+    user_id: &UserId,
+    account_id: &NipAccountId,
+) -> Result<bool, RepositoryError> {
+    let allowed = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT can_manage_credentials FROM user_nip_access WHERE user_id = ?1 AND nip_account_id = ?2",
+    )
+    .bind(user_id.to_string())
+    .bind(account_id.to_string())
+    .fetch_optional(exec)
+    .await?
+    .flatten()
+    .unwrap_or(0);
+
+    Ok(allowed != 0)
 }

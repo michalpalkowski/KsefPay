@@ -18,6 +18,8 @@ pub enum AuditAction {
     RevokePermission,
     GenerateToken,
     RevokeToken,
+    SaveCertificate,
+    DeleteCertificate,
     ExportStart,
     ChangePassword,
 }
@@ -35,6 +37,8 @@ impl AuditAction {
             Self::RevokePermission => "revoke_permission",
             Self::GenerateToken => "generate_token",
             Self::RevokeToken => "revoke_token",
+            Self::SaveCertificate => "save_certificate",
+            Self::DeleteCertificate => "delete_certificate",
             Self::ExportStart => "export_start",
             Self::ChangePassword => "change_password",
         }
@@ -61,6 +65,8 @@ impl FromStr for AuditAction {
             "revoke_permission" => Ok(Self::RevokePermission),
             "generate_token" => Ok(Self::GenerateToken),
             "revoke_token" => Ok(Self::RevokeToken),
+            "save_certificate" => Ok(Self::SaveCertificate),
+            "delete_certificate" => Ok(Self::DeleteCertificate),
             "export_start" => Ok(Self::ExportStart),
             "change_password" => Ok(Self::ChangePassword),
             other => Err(format!("invalid audit action: '{other}'")),

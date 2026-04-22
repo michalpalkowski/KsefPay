@@ -26,6 +26,7 @@ pub trait NipAccountRepository: Send + Sync {
         &self,
         user_id: &UserId,
         account_id: &NipAccountId,
+        can_manage_credentials: bool,
     ) -> Result<(), RepositoryError>;
 
     /// Revoke a user's access to a NIP account.
@@ -47,4 +48,12 @@ pub trait NipAccountRepository: Send + Sync {
         user_id: &UserId,
         nip: &Nip,
     ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError>;
+
+    /// Check whether the user may manage the stored certificate and private key
+    /// for the given NIP account.
+    async fn can_manage_credentials(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<bool, RepositoryError>;
 }

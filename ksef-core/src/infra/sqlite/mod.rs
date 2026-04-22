@@ -2,6 +2,7 @@ mod queries;
 
 use async_trait::async_trait;
 use sqlx::{Sqlite, SqlitePool, Transaction};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::domain::account_scope::AccountScope;
@@ -16,6 +17,7 @@ use crate::domain::session::KSeFNumber;
 use crate::domain::token_mgmt::LocalToken;
 use crate::domain::user::{User, UserId};
 use crate::error::{QueueError, RepositoryError};
+use crate::infra::crypto::CertificateSecretBox;
 use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -132,6 +134,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .execute(pool)
             .await?;
     }
+    if version < 10 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/010_nip_credential_managers.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 10")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -147,6 +159,7 @@ async fn detect_applied_version(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 
     match &invoice_sql {
         None => return Ok(0), // fresh database — no tables yet
+        Some(_) if has_manage_credentials_column(pool).await? => return Ok(10),
         Some(sql) if sql.contains("UNIQUE (ksef_number, nip_account_id)") => return Ok(9),
         _ => {}
     }
@@ -175,16 +188,38 @@ async fn detect_applied_version(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     Ok(6)
 }
 
+async fn has_manage_credentials_column(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let rows: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(user_nip_access)")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "can_manage_credentials"))
+}
+
 /// SQLite database handle. Implements all repository/queue/session ports.
 #[derive(Clone)]
 pub struct Db {
     pool: SqlitePool,
+    certificate_secret_box: Arc<CertificateSecretBox>,
 }
 
 impl Db {
     #[must_use]
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self::with_certificate_secret_box(pool, Arc::new(CertificateSecretBox::insecure_dev()))
+    }
+
+    #[must_use]
+    pub fn with_certificate_secret_box(
+        pool: SqlitePool,
+        certificate_secret_box: Arc<CertificateSecretBox>,
+    ) -> Self {
+        Self {
+            pool,
+            certificate_secret_box,
+        }
     }
 
     #[must_use]
@@ -196,6 +231,7 @@ impl Db {
         let transaction = self.pool.begin().await.map_err(RepositoryError::Database)?;
         Ok(Tx {
             inner: Mutex::new(Some(transaction)),
+            certificate_secret_box: self.certificate_secret_box.clone(),
         })
     }
 }
@@ -333,6 +369,7 @@ impl SessionRepository for Db {
 
 pub struct Tx {
     inner: Mutex<Option<Transaction<'static, Sqlite>>>,
+    certificate_secret_box: Arc<CertificateSecretBox>,
 }
 
 impl Tx {
@@ -621,27 +658,30 @@ impl AuditLogRepository for Db {
 #[async_trait]
 impl NipAccountRepository for Db {
     async fn create(&self, account: &NipAccount) -> Result<NipAccountId, RepositoryError> {
-        queries::nip_account::create(&self.pool, account).await
+        queries::nip_account::create(&self.pool, account, &self.certificate_secret_box).await
     }
 
     async fn find_by_id(&self, id: &NipAccountId) -> Result<NipAccount, RepositoryError> {
-        queries::nip_account::find_by_id(&self.pool, id).await
+        queries::nip_account::find_by_id(&self.pool, id, &self.certificate_secret_box).await
     }
 
     async fn find_by_nip(&self, nip: &Nip) -> Result<Option<NipAccount>, RepositoryError> {
-        queries::nip_account::find_by_nip(&self.pool, nip).await
+        queries::nip_account::find_by_nip(&self.pool, nip, &self.certificate_secret_box).await
     }
 
     async fn update_credentials(&self, account: &NipAccount) -> Result<(), RepositoryError> {
-        queries::nip_account::update_credentials(&self.pool, account).await
+        queries::nip_account::update_credentials(&self.pool, account, &self.certificate_secret_box)
+            .await
     }
 
     async fn grant_access(
         &self,
         user_id: &UserId,
         account_id: &NipAccountId,
+        can_manage_credentials: bool,
     ) -> Result<(), RepositoryError> {
-        queries::nip_account::grant_access(&self.pool, user_id, account_id).await
+        queries::nip_account::grant_access(&self.pool, user_id, account_id, can_manage_credentials)
+            .await
     }
 
     async fn revoke_access(
@@ -653,7 +693,7 @@ impl NipAccountRepository for Db {
     }
 
     async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
-        queries::nip_account::list_by_user(&self.pool, user_id).await
+        queries::nip_account::list_by_user(&self.pool, user_id, &self.certificate_secret_box).await
     }
 
     async fn verify_access(
@@ -661,7 +701,16 @@ impl NipAccountRepository for Db {
         user_id: &UserId,
         nip: &Nip,
     ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
-        queries::nip_account::verify_access(&self.pool, user_id, nip).await
+        queries::nip_account::verify_access(&self.pool, user_id, nip, &self.certificate_secret_box)
+            .await
+    }
+
+    async fn can_manage_credentials(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<bool, RepositoryError> {
+        queries::nip_account::can_manage_credentials(&self.pool, user_id, account_id).await
     }
 }
 
@@ -670,35 +719,38 @@ impl NipAccountRepository for Tx {
     async fn create(&self, account: &NipAccount) -> Result<NipAccountId, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::create(&mut **tx, account).await
+        queries::nip_account::create(&mut **tx, account, &self.certificate_secret_box).await
     }
 
     async fn find_by_id(&self, id: &NipAccountId) -> Result<NipAccount, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::find_by_id(&mut **tx, id).await
+        queries::nip_account::find_by_id(&mut **tx, id, &self.certificate_secret_box).await
     }
 
     async fn find_by_nip(&self, nip: &Nip) -> Result<Option<NipAccount>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::find_by_nip(&mut **tx, nip).await
+        queries::nip_account::find_by_nip(&mut **tx, nip, &self.certificate_secret_box).await
     }
 
     async fn update_credentials(&self, account: &NipAccount) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::update_credentials(&mut **tx, account).await
+        queries::nip_account::update_credentials(&mut **tx, account, &self.certificate_secret_box)
+            .await
     }
 
     async fn grant_access(
         &self,
         user_id: &UserId,
         account_id: &NipAccountId,
+        can_manage_credentials: bool,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::grant_access(&mut **tx, user_id, account_id).await
+        queries::nip_account::grant_access(&mut **tx, user_id, account_id, can_manage_credentials)
+            .await
     }
 
     async fn revoke_access(
@@ -714,7 +766,7 @@ impl NipAccountRepository for Tx {
     async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::list_by_user(&mut **tx, user_id).await
+        queries::nip_account::list_by_user(&mut **tx, user_id, &self.certificate_secret_box).await
     }
 
     async fn verify_access(
@@ -724,7 +776,18 @@ impl NipAccountRepository for Tx {
     ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::verify_access(&mut **tx, user_id, nip).await
+        queries::nip_account::verify_access(&mut **tx, user_id, nip, &self.certificate_secret_box)
+            .await
+    }
+
+    async fn can_manage_credentials(
+        &self,
+        user_id: &UserId,
+        account_id: &NipAccountId,
+    ) -> Result<bool, RepositoryError> {
+        let mut guard = self.conn().await;
+        let tx = guard.as_mut().unwrap();
+        queries::nip_account::can_manage_credentials(&mut **tx, user_id, account_id).await
     }
 }
 
@@ -745,6 +808,7 @@ impl AtomicScopeFactory for Db {
         let transaction = self.pool.begin().await.map_err(RepositoryError::Database)?;
         Ok(Box::new(Tx {
             inner: Mutex::new(Some(transaction)),
+            certificate_secret_box: self.certificate_secret_box.clone(),
         }))
     }
 }

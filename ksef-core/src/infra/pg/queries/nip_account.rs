@@ -5,6 +5,7 @@ use crate::domain::nip::Nip;
 use crate::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use crate::domain::user::UserId;
 use crate::error::RepositoryError;
+use crate::infra::crypto::CertificateSecretBox;
 
 fn decode_err(msg: String) -> RepositoryError {
     RepositoryError::Database(sqlx::Error::Decode(msg.into()))
@@ -25,13 +26,18 @@ struct NipAccountRow {
 }
 
 impl NipAccountRow {
-    fn into_domain(self) -> Result<NipAccount, RepositoryError> {
+    fn into_domain(
+        self,
+        certificate_secret_box: &CertificateSecretBox,
+    ) -> Result<NipAccount, RepositoryError> {
         let nip = Nip::parse(&self.nip)
             .map_err(|e| decode_err(format!("invalid NIP in nip_accounts: {e}")))?;
         let ksef_auth_method: KSeFAuthMethod = self
             .ksef_auth_method
             .parse()
             .map_err(|e: String| decode_err(e))?;
+        let cert_pem = decode_secret(self.cert_pem, certificate_secret_box, "cert_pem")?;
+        let key_pem = decode_secret(self.key_pem, certificate_secret_box, "key_pem")?;
 
         Ok(NipAccount {
             id: NipAccountId::from_uuid(self.id),
@@ -39,8 +45,8 @@ impl NipAccountRow {
             display_name: self.display_name,
             ksef_auth_method,
             ksef_auth_token: self.ksef_auth_token,
-            cert_pem: self.cert_pem.map(|s| s.into_bytes()),
-            key_pem: self.key_pem.map(|s| s.into_bytes()),
+            cert_pem,
+            key_pem,
             cert_auto_generated: self.cert_auto_generated,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -48,18 +54,42 @@ impl NipAccountRow {
     }
 }
 
+fn encode_secret(
+    secret: &Option<Vec<u8>>,
+    certificate_secret_box: &CertificateSecretBox,
+    field: &'static str,
+) -> Result<Option<String>, RepositoryError> {
+    secret
+        .as_ref()
+        .map(|bytes| {
+            certificate_secret_box
+                .encrypt(bytes)
+                .map_err(|e| RepositoryError::Storage(format!("{field}: {e}")))
+        })
+        .transpose()
+}
+
+fn decode_secret(
+    secret: Option<String>,
+    certificate_secret_box: &CertificateSecretBox,
+    field: &'static str,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    secret
+        .map(|value| {
+            certificate_secret_box
+                .decrypt_or_plaintext(&value)
+                .map_err(|e| RepositoryError::Storage(format!("{field}: {e}")))
+        })
+        .transpose()
+}
+
 pub async fn create<'e>(
     exec: impl PgExecutor<'e>,
     account: &NipAccount,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<NipAccountId, RepositoryError> {
-    let cert_pem_str = account
-        .cert_pem
-        .as_ref()
-        .map(|b| String::from_utf8_lossy(b).into_owned());
-    let key_pem_str = account
-        .key_pem
-        .as_ref()
-        .map(|b| String::from_utf8_lossy(b).into_owned());
+    let cert_pem_str = encode_secret(&account.cert_pem, certificate_secret_box, "cert_pem")?;
+    let key_pem_str = encode_secret(&account.key_pem, certificate_secret_box, "key_pem")?;
 
     sqlx::query(
         r"INSERT INTO nip_accounts (
@@ -95,6 +125,7 @@ pub async fn create<'e>(
 pub async fn find_by_id<'e>(
     exec: impl PgExecutor<'e>,
     id: &NipAccountId,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<NipAccount, RepositoryError> {
     let row: NipAccountRow = sqlx::query_as("SELECT * FROM nip_accounts WHERE id = $1")
         .bind(id.as_uuid())
@@ -104,32 +135,29 @@ pub async fn find_by_id<'e>(
             entity: "NipAccount",
             id: id.to_string(),
         })?;
-    row.into_domain()
+    row.into_domain(certificate_secret_box)
 }
 
 pub async fn find_by_nip<'e>(
     exec: impl PgExecutor<'e>,
     nip: &Nip,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Option<NipAccount>, RepositoryError> {
     let row: Option<NipAccountRow> = sqlx::query_as("SELECT * FROM nip_accounts WHERE nip = $1")
         .bind(nip.as_str())
         .fetch_optional(exec)
         .await?;
-    row.map(NipAccountRow::into_domain).transpose()
+    row.map(|row| row.into_domain(certificate_secret_box))
+        .transpose()
 }
 
 pub async fn update_credentials<'e>(
     exec: impl PgExecutor<'e>,
     account: &NipAccount,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<(), RepositoryError> {
-    let cert_pem_str = account
-        .cert_pem
-        .as_ref()
-        .map(|b| String::from_utf8_lossy(b).into_owned());
-    let key_pem_str = account
-        .key_pem
-        .as_ref()
-        .map(|b| String::from_utf8_lossy(b).into_owned());
+    let cert_pem_str = encode_secret(&account.cert_pem, certificate_secret_box, "cert_pem")?;
+    let key_pem_str = encode_secret(&account.key_pem, certificate_secret_box, "key_pem")?;
 
     let result = sqlx::query(
         r"UPDATE nip_accounts
@@ -163,12 +191,17 @@ pub async fn grant_access<'e>(
     exec: impl PgExecutor<'e>,
     user_id: &UserId,
     account_id: &NipAccountId,
+    can_manage_credentials: bool,
 ) -> Result<(), RepositoryError> {
     sqlx::query(
-        "INSERT INTO user_nip_access (user_id, nip_account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        r"INSERT INTO user_nip_access (user_id, nip_account_id, can_manage_credentials)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (user_id, nip_account_id) DO UPDATE
+          SET can_manage_credentials = EXCLUDED.can_manage_credentials",
     )
     .bind(user_id.as_uuid())
     .bind(account_id.as_uuid())
+    .bind(can_manage_credentials)
     .execute(exec)
     .await
     .map_err(|e| match &e {
@@ -199,6 +232,7 @@ pub async fn revoke_access<'e>(
 pub async fn list_by_user<'e>(
     exec: impl PgExecutor<'e>,
     user_id: &UserId,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Vec<NipAccount>, RepositoryError> {
     let rows: Vec<NipAccountRow> = sqlx::query_as(
         r"SELECT na.*
@@ -211,13 +245,16 @@ pub async fn list_by_user<'e>(
     .fetch_all(exec)
     .await?;
 
-    rows.into_iter().map(NipAccountRow::into_domain).collect()
+    rows.into_iter()
+        .map(|row| row.into_domain(certificate_secret_box))
+        .collect()
 }
 
 pub async fn verify_access<'e>(
     exec: impl PgExecutor<'e>,
     user_id: &UserId,
     nip: &Nip,
+    certificate_secret_box: &CertificateSecretBox,
 ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
     let row: Option<NipAccountRow> = sqlx::query_as(
         r"SELECT na.*
@@ -231,9 +268,27 @@ pub async fn verify_access<'e>(
     .await?;
 
     row.map(|r| {
-        let account = r.into_domain()?;
+        let account = r.into_domain(certificate_secret_box)?;
         let scope = AccountScope::new(account.id.clone(), account.nip.clone());
         Ok((account, scope))
     })
     .transpose()
+}
+
+pub async fn can_manage_credentials<'e>(
+    exec: impl PgExecutor<'e>,
+    user_id: &UserId,
+    account_id: &NipAccountId,
+) -> Result<bool, RepositoryError> {
+    let allowed = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT can_manage_credentials FROM user_nip_access WHERE user_id = $1 AND nip_account_id = $2",
+    )
+    .bind(user_id.as_uuid())
+    .bind(account_id.as_uuid())
+    .fetch_optional(exec)
+    .await?
+    .flatten()
+    .unwrap_or(false);
+
+    Ok(allowed)
 }
