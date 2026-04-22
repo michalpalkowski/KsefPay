@@ -10,7 +10,7 @@
 <div class="page-card auth-card">
   <div class="page-header">
     <h1>Rejestracja</h1>
-    <p class="page-copy">Utworz konto w KSeF Pay</p>
+    <p class="page-copy">{{ page_copy }}</p>
   </div>
 
   {% if let Some(msg) = error %}
@@ -21,10 +21,18 @@
   <div class="alert alert-info">{{ msg }}</div>
   {% endif %}
 
+  {% if let Some(msg) = extra_info %}
+  <div class="alert alert-info">
+    {{ msg }}
+  {% endif %}
+
   <form method="post" action="/register" class="auth-form">
     <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
-    {% if !invite_token.is_empty() %}
-    <input type="hidden" name="invite_token" value="{{ invite_token }}" />
+    {% if !workspace_invite_token.is_empty() %}
+    <input type="hidden" name="workspace_invite_token" value="{{ workspace_invite_token }}" />
+    {% endif %}
+    {% if !app_access_invite_token.is_empty() %}
+    <input type="hidden" name="app_access_invite_token" value="{{ app_access_invite_token }}" />
     {% endif %}
     <div class="form-group">
       <label for="email">Email</label>

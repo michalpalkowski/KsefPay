@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::domain::account_scope::AccountScope;
+use crate::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
 use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
@@ -22,6 +23,7 @@ use crate::domain::workspace::{
 };
 use crate::error::{QueueError, RepositoryError};
 use crate::infra::crypto::CertificateSecretBox;
+use crate::ports::application_access_repository::ApplicationAccessRepository;
 use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -169,6 +171,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .execute(pool)
             .await?;
     }
+    if version < 13 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/013_application_access_invites.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 13")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -184,7 +196,10 @@ async fn detect_applied_version(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 
     match &invoice_sql {
         None => return Ok(0), // fresh database — no tables yet
-        Some(_) if has_workspaces_table(pool).await? && !has_user_nip_access_table(pool).await? => {
+        Some(_) if has_application_access_invites_table(pool).await? => return Ok(13),
+        Some(_)
+            if has_workspaces_table(pool).await? && !has_user_nip_access_table(pool).await? =>
+        {
             return Ok(12);
         }
         Some(_) if has_workspaces_table(pool).await? => return Ok(11),
@@ -225,6 +240,14 @@ async fn has_manage_credentials_column(pool: &SqlitePool) -> Result<bool, sqlx::
     Ok(rows
         .iter()
         .any(|(_, name, _, _, _, _)| name == "can_manage_credentials"))
+}
+
+async fn has_application_access_invites_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'application_access_invites'",
+    )
+    .fetch_one(pool)
+    .await
 }
 
 async fn has_workspaces_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
@@ -637,6 +660,41 @@ impl UserRepository for Db {
 
     async fn update_password(&self, user: &User) -> Result<(), RepositoryError> {
         queries::user::update_password(&self.pool, user).await
+    }
+}
+
+#[async_trait]
+impl ApplicationAccessRepository for Db {
+    async fn create_invite(
+        &self,
+        invite: &ApplicationAccessInvite,
+    ) -> Result<ApplicationAccessInviteId, RepositoryError> {
+        queries::application_access::create_invite(&self.pool, invite).await
+    }
+
+    async fn list_pending_invites(&self) -> Result<Vec<ApplicationAccessInvite>, RepositoryError> {
+        queries::application_access::list_pending_invites(&self.pool).await
+    }
+
+    async fn find_invite_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ApplicationAccessInvite>, RepositoryError> {
+        queries::application_access::find_invite_by_token_hash(&self.pool, token_hash).await
+    }
+
+    async fn accept_invite(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::accept_invite(&self.pool, invite_id).await
+    }
+
+    async fn revoke_invite(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::revoke_invite(&self.pool, invite_id).await
     }
 }
 

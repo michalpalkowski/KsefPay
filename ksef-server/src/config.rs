@@ -1,6 +1,6 @@
 use ksef_core::domain::environment::KSeFEnvironment;
 
-use crate::email::SmtpEmailConfig;
+use crate::email::{SmtpAuthMode, SmtpEmailConfig, SmtpSecurityMode};
 
 pub struct Config {
     pub database_url: String,
@@ -51,8 +51,32 @@ impl Config {
             .map_err(|_| "SMTP_PORT not set")?
             .parse()
             .map_err(|_| "SMTP_PORT must be a valid port number")?;
-        let smtp_username = std::env::var("SMTP_USERNAME").map_err(|_| "SMTP_USERNAME not set")?;
-        let smtp_password = std::env::var("SMTP_PASSWORD").map_err(|_| "SMTP_PASSWORD not set")?;
+        let smtp_security = match std::env::var("SMTP_SECURITY")
+            .unwrap_or_else(|_| "starttls".to_string())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "starttls" => SmtpSecurityMode::StartTls,
+            "plaintext" => SmtpSecurityMode::Plaintext,
+            _ => return Err("SMTP_SECURITY must be one of: starttls, plaintext".to_string()),
+        };
+        let smtp_auth = match std::env::var("SMTP_AUTH")
+            .unwrap_or_else(|_| "required".to_string())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "required" => SmtpAuthMode::Required,
+            "none" => SmtpAuthMode::None,
+            _ => return Err("SMTP_AUTH must be one of: required, none".to_string()),
+        };
+        let smtp_username = std::env::var("SMTP_USERNAME")
+            .ok()
+            .filter(|v| !v.is_empty());
+        let smtp_password = std::env::var("SMTP_PASSWORD")
+            .ok()
+            .filter(|v| !v.is_empty());
         let smtp_from_email =
             std::env::var("SMTP_FROM_EMAIL").map_err(|_| "SMTP_FROM_EMAIL not set")?;
         let smtp_from_name =
@@ -66,6 +90,8 @@ impl Config {
             smtp: SmtpEmailConfig {
                 server: smtp_server,
                 port: smtp_port,
+                security: smtp_security,
+                auth: smtp_auth,
                 username: smtp_username,
                 password: smtp_password,
                 from_email: smtp_from_email,

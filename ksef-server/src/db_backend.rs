@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use ksef_core::infra::crypto::CertificateSecretBox;
 use ksef_core::infra::{pg, sqlite};
+use ksef_core::ports::application_access_repository::ApplicationAccessRepository;
 use ksef_core::ports::audit_log::AuditLogRepository;
 use ksef_core::ports::company_cache::CompanyCacheRepository;
 use ksef_core::ports::invoice_repository::InvoiceRepository;
@@ -39,6 +40,7 @@ pub struct DatabasePorts {
     pub audit_log_repo: Arc<dyn AuditLogRepository>,
     pub local_token_repo: Arc<dyn LocalTokenRepository>,
     pub workspace_repo: Arc<dyn WorkspaceRepository>,
+    pub application_access_repo: Arc<dyn ApplicationAccessRepository>,
 }
 
 pub fn detect_backend_kind(database_url: &str) -> anyhow::Result<DatabaseBackendKind> {
@@ -131,6 +133,7 @@ async fn connect_postgres(
     let audit_log_repo: Arc<dyn AuditLogRepository> = db.clone();
     let local_token_repo: Arc<dyn LocalTokenRepository> = db.clone();
     let workspace_repo: Arc<dyn WorkspaceRepository> = db.clone();
+    let application_access_repo: Arc<dyn ApplicationAccessRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -146,6 +149,7 @@ async fn connect_postgres(
         audit_log_repo,
         local_token_repo,
         workspace_repo,
+        application_access_repo,
     })
 }
 
@@ -189,6 +193,7 @@ async fn connect_sqlite(
     let audit_log_repo: Arc<dyn AuditLogRepository> = db.clone();
     let local_token_repo: Arc<dyn LocalTokenRepository> = db.clone();
     let workspace_repo: Arc<dyn WorkspaceRepository> = db.clone();
+    let application_access_repo: Arc<dyn ApplicationAccessRepository> = db.clone();
     let atomic_scope_factory: Arc<dyn AtomicScopeFactory> = db;
 
     Ok(DatabasePorts {
@@ -204,6 +209,7 @@ async fn connect_sqlite(
         audit_log_repo,
         local_token_repo,
         workspace_repo,
+        application_access_repo,
     })
 }
 

@@ -1,3 +1,4 @@
+pub mod application_access;
 pub mod audit;
 pub mod company_cache;
 pub(crate) mod datetime;

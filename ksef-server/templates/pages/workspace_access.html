@@ -7,8 +7,8 @@
 {% block content %}
 <div class="page-card">
   <div class="page-header">
-    <h1>Dostęp Workspace</h1>
-    <p class="page-copy">Zarządzasz dostępem do workspace <strong>{{ current_workspace_name }}</strong>.</p>
+    <h1>Udostępnianie Workspace</h1>
+    <p class="page-copy">Zarządzasz współdzielonym dostępem do workspace <strong>{{ current_workspace_name }}</strong>.</p>
   </div>
 
   {% if let Some(msg) = error %}
@@ -20,7 +20,23 @@
   {% endif %}
 
   <div class="card">
-    <h2>Nowe zaproszenie</h2>
+    <h2>Co oznacza zaproszenie</h2>
+    <p class="page-copy">
+      Zaproszenie nie daje tylko dostępu do aplikacji. Zaproszona osoba dołącza do tego konkretnego workspace
+      i po akceptacji zobaczy jego dane zgodnie z rolą, w tym przypisane NIP-y, faktury i inne zasoby workspace.
+    </p>
+    <p class="page-copy">
+      Jeśli chcesz, aby ktoś miał dostęp do aplikacji, ale pracował na własnych danych, użyj osobnego flow
+      <strong>Dostęp do aplikacji</strong>. To tworzy niezależny workspace zamiast współdzielić ten obecny.
+    </p>
+    <div class="form-actions">
+      <a href="/application-access" class="btn btn-secondary">Daj dostęp do aplikacji</a>
+      <a href="/workspaces/new" class="btn btn-secondary">Utwórz osobny workspace</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Nowe zaproszenie do współdzielonego workspace</h2>
     <form method="post" action="/workspaces/invites" class="stack-form">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
       <div class="form-row">
@@ -34,9 +50,10 @@
           <option value="operator"{% if selected_role == "operator" %} selected{% endif %}>Operator</option>
           <option value="read_only"{% if selected_role == "read_only" %} selected{% endif %}>Read only</option>
         </select>
+        <small class="form-hint">Rola określa zakres pracy we wspólnym workspace, nie tworzy osobnej przestrzeni danych.</small>
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Utwórz zaproszenie</button>
+        <button type="submit" class="btn btn-primary">Udostępnij workspace</button>
       </div>
     </form>
   </div>

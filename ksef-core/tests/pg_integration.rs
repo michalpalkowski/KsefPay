@@ -1270,9 +1270,14 @@ async fn workspace_role_controls_credential_management() {
     UserRepository::create(&db, &operator).await.unwrap();
 
     let workspace = ensure_default_workspace(&db, &owner).await;
-    WorkspaceRepository::add_member(&db, &workspace.workspace.id, &operator.id, WorkspaceRole::Operator)
-        .await
-        .unwrap();
+    WorkspaceRepository::add_member(
+        &db,
+        &workspace.workspace.id,
+        &operator.id,
+        WorkspaceRole::Operator,
+    )
+    .await
+    .unwrap();
 
     let acc = make_nip_account(&test_nip());
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();

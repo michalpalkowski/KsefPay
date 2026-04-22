@@ -5,17 +5,19 @@ use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
 use tower_sessions::Session;
+use uuid::Uuid;
 
 use ksef_core::domain::workspace::{
-    WorkspaceId, WorkspaceInvite, WorkspaceInviteId, WorkspaceMembershipStatus, WorkspaceRole,
+    Workspace, WorkspaceId, WorkspaceInvite, WorkspaceInviteId, WorkspaceMembershipStatus,
+    WorkspaceRole,
 };
 use ksef_core::error::RepositoryError;
 
 use crate::csrf::ensure_csrf_token;
-use crate::email::{dispatch_workspace_invite, EmailSendError, WorkspaceInviteEmail};
+use crate::email::{EmailSendError, WorkspaceInviteEmail, dispatch_workspace_invite};
 use crate::extractors::{AuthUser, CURRENT_WORKSPACE_SESSION_KEY, CsrfForm, WorkspaceContext};
+use crate::invite_tokens::{generate_invite_token, hash_invite_token, invite_expiration};
 use crate::state::AppState;
-use crate::workspace_invites::{generate_invite_token, hash_invite_token, invite_expiration};
 
 #[derive(Deserialize)]
 pub struct SelectWorkspaceFormData {
@@ -31,6 +33,11 @@ pub struct CreateInviteFormData {
 
 #[derive(Deserialize)]
 pub struct RevokeInviteFormData {}
+
+#[derive(Deserialize)]
+pub struct CreateWorkspaceFormData {
+    pub display_name: String,
+}
 
 #[derive(Debug, Clone)]
 struct PendingInviteTemplate {
@@ -53,6 +60,18 @@ struct WorkspaceAccessTemplate {
     pending_invites: Vec<PendingInviteTemplate>,
     error: Option<String>,
     success: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "pages/workspace_new.html")]
+struct WorkspaceNewTemplate {
+    active: &'static str,
+    nip_prefix: Option<String>,
+    user_email: String,
+    current_workspace_name: String,
+    csrf_token: String,
+    display_name: String,
+    error: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -85,6 +104,18 @@ enum WorkspaceAccessError {
     InviteDelivery(#[from] EmailSendError),
     #[error("workspace repository error: {0}")]
     Repository(#[from] RepositoryError),
+}
+
+#[derive(Debug, Error)]
+enum WorkspaceCreateError {
+    #[error("workspace name is required")]
+    MissingName,
+    #[error("workspace name is too short")]
+    NameTooShort,
+    #[error("workspace repository error: {0}")]
+    Repository(#[from] RepositoryError),
+    #[error("session write error: {0}")]
+    Session(String),
 }
 
 impl IntoResponse for SelectWorkspaceError {
@@ -156,8 +187,71 @@ fn render_workspace_access(
     }
 }
 
+fn render_workspace_new(
+    status: axum::http::StatusCode,
+    workspace_ctx: &WorkspaceContext,
+    csrf_token: String,
+    display_name: String,
+    error: Option<String>,
+) -> Response {
+    match (WorkspaceNewTemplate {
+        active: "/workspace-new",
+        nip_prefix: None,
+        user_email: workspace_ctx.user.email.clone(),
+        current_workspace_name: workspace_ctx.workspace.display_name.clone(),
+        csrf_token,
+        display_name,
+        error,
+    })
+    .render()
+    {
+        Ok(html) => (status, Html(html)).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Template error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
+}
+
+fn normalize_workspace_name(display_name: &str) -> String {
+    display_name.trim().to_string()
+}
+
+fn workspace_slug(display_name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+
+    for ch in display_name.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    let base = if slug.is_empty() {
+        "workspace".to_string()
+    } else {
+        slug
+    };
+    let suffix: String = Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(8)
+        .collect();
+    format!("{base}-{suffix}")
 }
 
 fn is_valid_email(email: &str) -> bool {
@@ -240,11 +334,7 @@ pub async fn access_page(
     session: Session,
 ) -> Response {
     if let Err(err) = ensure_manage_members(&workspace_ctx).await {
-        return (
-            axum::http::StatusCode::FORBIDDEN,
-            err.to_string(),
-        )
-            .into_response();
+        return (axum::http::StatusCode::FORBIDDEN, err.to_string()).into_response();
     }
 
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
@@ -271,6 +361,75 @@ pub async fn access_page(
         error: None,
         success: None,
     })
+}
+
+pub async fn new_page(workspace_ctx: WorkspaceContext, session: Session) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    render_workspace_new(
+        axum::http::StatusCode::OK,
+        &workspace_ctx,
+        csrf_token,
+        String::new(),
+        None,
+    )
+}
+
+pub async fn create_workspace(
+    State(state): State<AppState>,
+    workspace_ctx: WorkspaceContext,
+    session: Session,
+    CsrfForm(form): CsrfForm<CreateWorkspaceFormData>,
+) -> Response {
+    let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
+    let display_name = normalize_workspace_name(&form.display_name);
+
+    let result: Result<WorkspaceId, WorkspaceCreateError> = async {
+        if display_name.is_empty() {
+            return Err(WorkspaceCreateError::MissingName);
+        }
+        if display_name.chars().count() < 3 {
+            return Err(WorkspaceCreateError::NameTooShort);
+        }
+
+        let now = Utc::now();
+        let workspace = Workspace {
+            id: WorkspaceId::new(),
+            slug: workspace_slug(&display_name),
+            display_name: display_name.clone(),
+            created_by_user_id: workspace_ctx.user.id.clone(),
+            created_at: now,
+            updated_at: now,
+        };
+        let workspace_id = state
+            .workspace_repo
+            .create_workspace(&workspace, &workspace_ctx.user.id)
+            .await?;
+        session
+            .insert(CURRENT_WORKSPACE_SESSION_KEY, workspace_id.to_string())
+            .await
+            .map_err(|e| WorkspaceCreateError::Session(format!("session write error: {e}")))?;
+        Ok(workspace_id)
+    }
+    .await;
+
+    match result {
+        Ok(_) => Redirect::to("/accounts").into_response(),
+        Err(err @ WorkspaceCreateError::MissingName)
+        | Err(err @ WorkspaceCreateError::NameTooShort) => render_workspace_new(
+            axum::http::StatusCode::BAD_REQUEST,
+            &workspace_ctx,
+            csrf_token,
+            display_name,
+            Some(err.to_string()),
+        ),
+        Err(err) => render_workspace_new(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &workspace_ctx,
+            csrf_token,
+            display_name,
+            Some(err.to_string()),
+        ),
+    }
 }
 
 pub async fn create_invite(
@@ -585,9 +744,7 @@ mod tests {
     use ksef_core::domain::environment::KSeFEnvironment;
     use ksef_core::domain::user::{User, UserId};
     use ksef_core::infra::batch::zip_builder::BatchFileBuilder;
-    use ksef_core::infra::crypto::{
-        AesCbcEncryptor, OpenSslSignerFactory, OpenSslXadesSigner,
-    };
+    use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslSignerFactory, OpenSslXadesSigner};
     use ksef_core::infra::fa3::Fa3XmlConverter;
     use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
     use ksef_core::infra::http::retry::RetryPolicy;
@@ -607,7 +764,9 @@ mod tests {
     use ksef_core::services::token_mgmt_service::TokenMgmtService;
 
     use crate::auth_rate_limit::AuthRateLimiter;
-    use crate::email::{EmailSendError, EmailSender, WorkspaceInviteEmail};
+    use crate::email::{
+        ApplicationAccessInviteEmail, EmailSendError, EmailSender, WorkspaceInviteEmail,
+    };
 
     #[derive(Default)]
     struct RecordingEmailSender {
@@ -632,11 +791,16 @@ mod tests {
             self.sent.lock().unwrap().push(invite);
             Ok(())
         }
+
+        fn send_application_access_invite(
+            &self,
+            _invite: ApplicationAccessInviteEmail,
+        ) -> Result<(), EmailSendError> {
+            Ok(())
+        }
     }
 
-    async fn test_state(
-        email_sender: Arc<dyn EmailSender>,
-    ) -> (AppState, std::path::PathBuf) {
+    async fn test_state(email_sender: Arc<dyn EmailSender>) -> (AppState, std::path::PathBuf) {
         let db_path = std::env::temp_dir().join(format!(
             "ksef-server-workspaces-test-{}.db",
             uuid::Uuid::new_v4()
@@ -692,7 +856,10 @@ mod tests {
             Arc::new(BatchFileBuilder::default()),
         ));
         let qr_renderer = Arc::new(QRCodeGenerator);
-        let qr_service = Arc::new(QRService::new(KSeFEnvironment::Production, qr_renderer.clone()));
+        let qr_service = Arc::new(QRService::new(
+            KSeFEnvironment::Production,
+            qr_renderer.clone(),
+        ));
         let offline_service = Arc::new(OfflineService::new(
             QRService::new(KSeFEnvironment::Production, qr_renderer),
             OfflineConfig::default(),
@@ -703,6 +870,7 @@ mod tests {
             user_repo: db.user_repo.clone(),
             nip_account_repo: db.nip_account_repo.clone(),
             workspace_repo: db.workspace_repo.clone(),
+            application_access_repo: db.application_access_repo.clone(),
             company_lookup_service,
             invoice_sequence: db.invoice_sequence.clone(),
             invoice_service,
@@ -752,11 +920,7 @@ mod tests {
         }
     }
 
-    async fn workspace_ctx(
-        state: &AppState,
-        user: &User,
-        role: WorkspaceRole,
-    ) -> WorkspaceContext {
+    async fn workspace_ctx(state: &AppState, user: &User, role: WorkspaceRole) -> WorkspaceContext {
         let summary = state
             .workspace_repo
             .ensure_default_workspace(&user.id, &user.email)
@@ -817,9 +981,11 @@ mod tests {
         let sent = sender.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].recipient_email, "new.user@example.com");
-        assert!(sent[0]
-            .invite_url
-            .starts_with("https://app.example.test/register?invite="));
+        assert!(
+            sent[0]
+                .invite_url
+                .starts_with("https://app.example.test/register?invite=")
+        );
 
         let _ = std::fs::remove_file(db_path);
     }
@@ -904,6 +1070,68 @@ mod tests {
             .await
             .unwrap();
         assert!(invites.is_empty());
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn create_workspace_creates_independent_workspace_and_switches_session() {
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let owner = make_user("owner@example.com");
+        state.user_repo.create(&owner).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
+        let original_workspace_id = workspace_ctx.workspace.id.clone();
+        let session = session_with_csrf("csrf").await;
+
+        let response = create_workspace(
+            State(state.clone()),
+            workspace_ctx,
+            session.clone(),
+            CsrfForm(CreateWorkspaceFormData {
+                display_name: "Biuro Alfa".to_string(),
+            }),
+        )
+        .await;
+
+        assert!(response.status().is_redirection());
+        let workspaces = state.workspace_repo.list_for_user(&owner.id).await.unwrap();
+        assert_eq!(workspaces.len(), 2);
+        assert!(
+            workspaces
+                .iter()
+                .any(|summary| summary.workspace.display_name == "Biuro Alfa")
+        );
+
+        let selected_workspace_id: String = session
+            .get(CURRENT_WORKSPACE_SESSION_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(selected_workspace_id, original_workspace_id.to_string());
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn create_workspace_rejects_blank_name() {
+        let (state, db_path) = test_state(Arc::new(RecordingEmailSender::default())).await;
+        let owner = make_user("owner@example.com");
+        state.user_repo.create(&owner).await.unwrap();
+        let workspace_ctx = workspace_ctx(&state, &owner, WorkspaceRole::Owner).await;
+
+        let response = create_workspace(
+            State(state),
+            workspace_ctx,
+            session_with_csrf("csrf").await,
+            CsrfForm(CreateWorkspaceFormData {
+                display_name: "  ".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_text(response).await;
+        assert!(body.contains("workspace name is required"));
 
         let _ = std::fs::remove_file(db_path);
     }

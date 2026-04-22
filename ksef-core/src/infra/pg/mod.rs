@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::domain::account_scope::AccountScope;
+use crate::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
 use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
@@ -22,6 +23,7 @@ use crate::domain::workspace::{
 };
 use crate::error::{QueueError, RepositoryError};
 use crate::infra::crypto::CertificateSecretBox;
+use crate::ports::application_access_repository::ApplicationAccessRepository;
 use crate::ports::audit_log::AuditLogRepository;
 use crate::ports::company_cache::CompanyCacheRepository;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -89,6 +91,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
         .await?;
     sqlx::raw_sql(include_str!(
         "../../../migrations/012_drop_user_nip_access.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/013_application_access_invites.sql"
     ))
     .execute(pool)
     .await?;
@@ -277,6 +284,41 @@ impl UserRepository for Db {
     }
     async fn update_password(&self, user: &User) -> Result<(), RepositoryError> {
         queries::user::update_password(&self.pool, user).await
+    }
+}
+
+#[async_trait]
+impl ApplicationAccessRepository for Db {
+    async fn create_invite(
+        &self,
+        invite: &ApplicationAccessInvite,
+    ) -> Result<ApplicationAccessInviteId, RepositoryError> {
+        queries::application_access::create_invite(&self.pool, invite).await
+    }
+
+    async fn list_pending_invites(&self) -> Result<Vec<ApplicationAccessInvite>, RepositoryError> {
+        queries::application_access::list_pending_invites(&self.pool).await
+    }
+
+    async fn find_invite_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ApplicationAccessInvite>, RepositoryError> {
+        queries::application_access::find_invite_by_token_hash(&self.pool, token_hash).await
+    }
+
+    async fn accept_invite(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::accept_invite(&self.pool, invite_id).await
+    }
+
+    async fn revoke_invite(
+        &self,
+        invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::revoke_invite(&self.pool, invite_id).await
     }
 }
 

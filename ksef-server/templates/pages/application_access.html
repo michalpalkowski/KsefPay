@@ -1,0 +1,92 @@
+{% extends "layouts/app.html" %}
+
+{% block head %}
+<title>Dostęp do aplikacji - KSeF Pay</title>
+{% endblock %}
+
+{% block content %}
+<div class="page-card">
+  <div class="page-header">
+    <h1>Dostęp do aplikacji</h1>
+    <p class="page-copy">Zarządzasz dostępem do samej aplikacji. To nie udostępnia danych z workspace <strong>{{ current_workspace_name }}</strong>.</p>
+  </div>
+
+  {% if let Some(msg) = error %}
+  <div class="alert alert-error">{{ msg }}</div>
+  {% endif %}
+
+  {% if let Some(msg) = success %}
+  <div class="alert alert-success">{{ msg }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Co oznacza to zaproszenie</h2>
+    <p class="page-copy">
+      Zaproszenie do aplikacji daje użytkownikowi możliwość rejestracji i pracy we własnym, niezależnym workspace.
+      Nie dołącza go do bieżącego workspace i nie udostępnia Twoich NIP-ów, faktur ani certyfikatów.
+    </p>
+    <div class="form-actions">
+      <a href="/workspaces/access" class="btn btn-secondary">Przejdź do udostępniania workspace</a>
+    </div>
+  </div>
+
+  {% if can_manage_application_access %}
+  <div class="card">
+    <h2>Nowe zaproszenie do aplikacji</h2>
+    <form method="post" action="/application-access/invites" class="stack-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+      <div class="form-row">
+        <label for="email">Email użytkownika</label>
+        <input type="email" id="email" name="email" value="{{ invite_email }}" placeholder="user@example.com" required />
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Daj dostęp do aplikacji</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Oczekujące zaproszenia</h2>
+    {% if pending_invites.is_empty() %}
+    <p class="page-copy">Brak oczekujących zaproszeń do aplikacji.</p>
+    {% else %}
+    <div class="table-wrap">
+      <table class="invoice-table">
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Wystawił</th>
+            <th>Ważne do</th>
+            <th>Akcje</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for invite in pending_invites %}
+          <tr>
+            <td>{{ invite.email }}</td>
+            <td>{{ invite.created_by_email }}</td>
+            <td>{{ invite.expires_at }}</td>
+            <td>
+              <form method="post" action="/application-access/invites/{{ invite.id }}/revoke" class="inline-form">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+                <button type="submit" class="btn btn-secondary btn-sm">Odwołaj</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="card">
+    <h2>Brak uprawnień do tego ekranu</h2>
+    <p class="page-copy">
+      Ten ekran jest przeznaczony wyłącznie dla bootstrap administratorów skonfigurowanych w <code>ALLOWED_EMAILS</code>.
+      Jeśli chcesz zaprosić kogoś do wspólnej pracy na tych samych danych, użyj sekcji <strong>Workspace</strong>.
+    </p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::nip_account::NipAccountId;
+use ksef_core::ports::application_access_repository::ApplicationAccessRepository;
 use ksef_core::ports::invoice_sequence::InvoiceSequenceRepository;
 use ksef_core::ports::local_token_repository::LocalTokenRepository;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
@@ -60,6 +61,7 @@ pub struct AppState {
     pub token_mgmt_service: Arc<TokenMgmtService>,
     pub local_token_repo: Arc<dyn LocalTokenRepository>,
     pub workspace_repo: Arc<dyn WorkspaceRepository>,
+    pub application_access_repo: Arc<dyn ApplicationAccessRepository>,
     pub email_sender: SharedEmailSender,
     pub export_service: Arc<ExportService>,
     pub offline_service: Arc<OfflineService>,

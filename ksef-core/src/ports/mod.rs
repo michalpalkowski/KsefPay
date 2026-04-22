@@ -1,3 +1,4 @@
+pub mod application_access_repository;
 pub mod audit_log;
 pub mod batch_archive_builder;
 pub mod company_cache;

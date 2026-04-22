@@ -1125,6 +1125,7 @@ mod tests {
             user_repo: db.user_repo.clone(),
             nip_account_repo: db.nip_account_repo.clone(),
             workspace_repo: db.workspace_repo.clone(),
+            application_access_repo: db.application_access_repo.clone(),
             company_lookup_service,
             invoice_sequence: db.invoice_sequence.clone(),
             invoice_service,
@@ -1415,7 +1416,8 @@ mod tests {
 
         let response = certificate_save(
             State(state.clone()),
-            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &operator, &nip).await,
+            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &operator, &nip)
+                .await,
             HeaderMap::new(),
             session_with_csrf("csrf-save").await,
             multipart_from_text_fields(
@@ -1474,7 +1476,8 @@ mod tests {
 
         let response = certificate_form(
             State(state.clone()),
-            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &operator, &nip).await,
+            nip_ctx_for_workspace_user(&state, &owner_workspace.workspace.id, &operator, &nip)
+                .await,
             session_with_csrf("csrf-form").await,
         )
         .await;

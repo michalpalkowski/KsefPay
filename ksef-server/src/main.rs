@@ -32,6 +32,7 @@ use ksef_core::services::session_service::{AuthMethod, SessionService};
 use ksef_core::services::token_mgmt_service::TokenMgmtService;
 use ksef_core::workers::job_worker::JobWorker;
 
+mod application_access_invites;
 mod audit_log;
 mod auth_rate_limit;
 mod config;
@@ -39,6 +40,7 @@ mod csrf;
 mod db_backend;
 mod email;
 mod extractors;
+mod invite_tokens;
 mod request_meta;
 mod routes;
 mod state;
@@ -216,6 +218,7 @@ async fn main() -> anyhow::Result<()> {
         token_mgmt_service,
         local_token_repo: db.local_token_repo.clone(),
         workspace_repo: db.workspace_repo.clone(),
+        application_access_repo: db.application_access_repo.clone(),
         email_sender,
         export_service,
         offline_service,

@@ -16,6 +16,11 @@
 
   <div class="card">
     <h2>Workspace</h2>
+    <p class="page-copy">
+      Przełączasz tutaj aktywny workspace albo tworzysz nowy, niezależny workspace z własnymi danymi.
+      Udostępnianie bieżącego workspace innym użytkownikom jest dostępne w sekcji <strong>Workspace</strong>,
+      a nadawanie samego dostępu do aplikacji bez współdzielenia danych w sekcji <strong>Dostęp do aplikacji</strong>.
+    </p>
     <form method="post" action="/workspaces/select" class="inline-form">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
       <input type="hidden" name="return_to" value="/accounts" />
@@ -31,6 +36,7 @@
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-secondary">Przełącz</button>
+        <a href="/workspaces/new" class="btn btn-primary">Nowy workspace</a>
       </div>
     </form>
   </div>
