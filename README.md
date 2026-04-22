@@ -71,6 +71,7 @@ Important values:
 - `DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef`
 - `APP_BASE_URL=http://localhost:3000`
 - `KSEF_ENVIRONMENT=test`
+- `APPLICATION_ACCESS_MODE=email_invite`
 - `SMTP_HOST=127.0.0.1`
 - `SMTP_PORT=1025`
 - `SMTP_SECURITY=plaintext`
@@ -80,7 +81,7 @@ Important values:
 Change `ALLOWED_EMAILS` to your bootstrap admin email before first login, for example:
 
 ```env
-ALLOWED_EMAILS=michal@example.com
+ALLOWED_EMAILS=your_email@example.com
 ```
 
 ### 2. Start dependencies and app
@@ -137,6 +138,20 @@ Effect:
 - invited user does not join your workspace
 - invited user creates and uses their own independent workspace
 
+### 4a. Application Access Mode
+
+Application access works in exactly one mode at a time.
+
+- `APPLICATION_ACCESS_MODE=email_invite`
+  - bootstrap admins grant access by email invite
+  - requires SMTP
+  - workspace-sharing invites by email are available
+- `APPLICATION_ACCESS_MODE=trusted_email`
+  - bootstrap admins add specific trusted emails in the UI
+  - no SMTP is required
+  - the trusted user can self-register with that exact email and gets their own workspace
+  - workspace-sharing invites by email are disabled in this mode
+
 ### 5. Open local emails
 
 Mailpit catches emails locally instead of sending them to the internet.
@@ -154,10 +169,11 @@ Yes, the production build can work, but only if you set the required environment
 The critical production requirements are:
 
 - real PostgreSQL
-- real SMTP
 - HTTPS in front of the app
 - stable `APP_BASE_URL`
 - persistent `CERT_STORAGE_KEY`
+
+SMTP is required only when `APPLICATION_ACCESS_MODE=email_invite`.
 
 Without that, production is not correctly configured.
 
@@ -167,8 +183,8 @@ This app assumes:
 
 - one deployed server process
 - one PostgreSQL database
-- SMTP available for invitations
 - reverse proxy or load balancer terminating TLS
+- either SMTP-backed invite onboarding or trusted-email onboarding, depending on `APPLICATION_ACCESS_MODE`
 
 ### Production-critical env
 
@@ -178,13 +194,14 @@ This app assumes:
 | `APP_BASE_URL` | yes | Must be the public HTTPS URL of the app |
 | `KSEF_ENVIRONMENT` | yes | Usually `production` or `test` |
 | `CERT_STORAGE_KEY` | yes in production | Used to encrypt stored certs/keys in DB |
-| `SMTP_HOST` | yes | Real SMTP provider |
-| `SMTP_PORT` | yes | Usually `587` |
-| `SMTP_SECURITY` | yes | Usually `starttls` |
-| `SMTP_AUTH` | yes | Usually `required` |
+| `APPLICATION_ACCESS_MODE` | yes | `email_invite` or `trusted_email` |
+| `SMTP_HOST` | yes when `APPLICATION_ACCESS_MODE=email_invite` | Real SMTP provider |
+| `SMTP_PORT` | yes when `APPLICATION_ACCESS_MODE=email_invite` | Usually `587` |
+| `SMTP_SECURITY` | yes when `APPLICATION_ACCESS_MODE=email_invite` | Usually `starttls` |
+| `SMTP_AUTH` | yes when `APPLICATION_ACCESS_MODE=email_invite` | Usually `required` |
 | `SMTP_USERNAME` | yes when auth required | SMTP login |
 | `SMTP_PASSWORD` | yes when auth required | SMTP password |
-| `SMTP_FROM_EMAIL` | yes | Sender email |
+| `SMTP_FROM_EMAIL` | yes when `APPLICATION_ACCESS_MODE=email_invite` | Sender email |
 | `SMTP_FROM_NAME` | no | Display name |
 | `ALLOWED_EMAILS` | yes | Bootstrap admins only |
 | `SERVER_HOST` | no | Usually `0.0.0.0` |
@@ -214,13 +231,16 @@ Minimal path:
 cp .env.example .env
 ```
 
-Then edit `.env` for production values, especially:
+Then edit `.env` for production values.
+
+If you use SMTP-backed invites:
 
 ```env
 DATABASE_URL=postgres://ksef:strong-password@postgres:5432/ksef
 APP_BASE_URL=https://app.example.com
 KSEF_ENVIRONMENT=production
 CERT_STORAGE_KEY=replace-with-stable-secret
+APPLICATION_ACCESS_MODE=email_invite
 
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587
@@ -230,6 +250,18 @@ SMTP_USERNAME=smtp-user
 SMTP_PASSWORD=smtp-password
 SMTP_FROM_EMAIL=noreply@example.com
 SMTP_FROM_NAME=KSeF Pay
+
+ALLOWED_EMAILS=owner@example.com
+```
+
+If you run without SMTP:
+
+```env
+DATABASE_URL=postgres://ksef:strong-password@postgres:5432/ksef
+APP_BASE_URL=https://app.example.com
+KSEF_ENVIRONMENT=production
+CERT_STORAGE_KEY=replace-with-stable-secret
+APPLICATION_ACCESS_MODE=trusted_email
 
 ALLOWED_EMAILS=owner@example.com
 ```
