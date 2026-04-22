@@ -58,3 +58,53 @@ pub struct ApplicationAccessInvite {
     pub created_by_user_id: UserId,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TrustedApplicationEmailAccessId(Uuid);
+
+impl TrustedApplicationEmailAccessId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    #[must_use]
+    pub fn from_uuid(id: Uuid) -> Self {
+        Self(id)
+    }
+
+    #[must_use]
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl Default for TrustedApplicationEmailAccessId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for TrustedApplicationEmailAccessId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for TrustedApplicationEmailAccessId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(value)?))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TrustedApplicationEmailAccess {
+    pub id: TrustedApplicationEmailAccessId,
+    pub email: String,
+    pub consumed_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_by_user_id: UserId,
+    pub created_at: DateTime<Utc>,
+}

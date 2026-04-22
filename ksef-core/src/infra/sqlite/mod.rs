@@ -6,7 +6,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::domain::account_scope::AccountScope;
-use crate::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
+use crate::domain::application_access::{
+    ApplicationAccessInvite, ApplicationAccessInviteId, TrustedApplicationEmailAccess,
+    TrustedApplicationEmailAccessId,
+};
 use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
@@ -188,6 +191,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         sqlx::raw_sql("PRAGMA user_version = 14")
+            .execute(pool)
+            .await?;
+    }
+    if version < 15 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/sqlite/015_trusted_application_access.sql"
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::raw_sql("PRAGMA user_version = 15")
             .execute(pool)
             .await?;
     }
@@ -725,6 +738,55 @@ impl ApplicationAccessRepository for Db {
         invite_id: &ApplicationAccessInviteId,
     ) -> Result<(), RepositoryError> {
         queries::application_access::revoke_invite(&self.pool, invite_id).await
+    }
+
+    async fn create_trusted_email_access(
+        &self,
+        access: &TrustedApplicationEmailAccess,
+    ) -> Result<TrustedApplicationEmailAccessId, RepositoryError> {
+        queries::application_access::create_trusted_email_access(&self.pool, access).await
+    }
+
+    async fn list_pending_trusted_email_access(
+        &self,
+    ) -> Result<Vec<TrustedApplicationEmailAccess>, RepositoryError> {
+        queries::application_access::list_pending_trusted_email_access(&self.pool).await
+    }
+
+    async fn find_pending_trusted_email_access_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<TrustedApplicationEmailAccess>, RepositoryError> {
+        queries::application_access::find_pending_trusted_email_access_by_email(&self.pool, email)
+            .await
+    }
+
+    async fn activate_trusted_email_access(
+        &self,
+        access_id: &TrustedApplicationEmailAccessId,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError> {
+        let tx = self.tx().await?;
+        let summary = {
+            let mut guard = tx.conn().await;
+            let inner = guard.as_mut().unwrap();
+            let summary =
+                queries::workspace::ensure_default_workspace_in_tx(inner, user_id, user_email)
+                    .await?;
+            queries::application_access::consume_trusted_email_access(&mut **inner, access_id)
+                .await?;
+            summary
+        };
+        tx.commit().await?;
+        Ok(summary)
+    }
+
+    async fn revoke_trusted_email_access(
+        &self,
+        access_id: &TrustedApplicationEmailAccessId,
+    ) -> Result<(), RepositoryError> {
+        queries::application_access::revoke_trusted_email_access(&self.pool, access_id).await
     }
 }
 

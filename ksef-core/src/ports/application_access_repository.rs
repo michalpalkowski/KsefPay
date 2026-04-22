@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 
-use crate::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
+use crate::domain::application_access::{
+    ApplicationAccessInvite, ApplicationAccessInviteId, TrustedApplicationEmailAccess,
+    TrustedApplicationEmailAccessId,
+};
 use crate::domain::user::UserId;
 use crate::domain::workspace::WorkspaceSummary;
 use crate::error::RepositoryError;
@@ -34,5 +37,31 @@ pub trait ApplicationAccessRepository: Send + Sync {
     async fn revoke_invite(
         &self,
         invite_id: &ApplicationAccessInviteId,
+    ) -> Result<(), RepositoryError>;
+
+    async fn create_trusted_email_access(
+        &self,
+        access: &TrustedApplicationEmailAccess,
+    ) -> Result<TrustedApplicationEmailAccessId, RepositoryError>;
+
+    async fn list_pending_trusted_email_access(
+        &self,
+    ) -> Result<Vec<TrustedApplicationEmailAccess>, RepositoryError>;
+
+    async fn find_pending_trusted_email_access_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<TrustedApplicationEmailAccess>, RepositoryError>;
+
+    async fn activate_trusted_email_access(
+        &self,
+        access_id: &TrustedApplicationEmailAccessId,
+        user_id: &UserId,
+        user_email: &str,
+    ) -> Result<WorkspaceSummary, RepositoryError>;
+
+    async fn revoke_trusted_email_access(
+        &self,
+        access_id: &TrustedApplicationEmailAccessId,
     ) -> Result<(), RepositoryError>;
 }

@@ -12,7 +12,10 @@ use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 use ksef_core::domain::account_scope::AccountScope;
-use ksef_core::domain::application_access::{ApplicationAccessInvite, ApplicationAccessInviteId};
+use ksef_core::domain::application_access::{
+    ApplicationAccessInvite, ApplicationAccessInviteId, TrustedApplicationEmailAccess,
+    TrustedApplicationEmailAccessId,
+};
 use ksef_core::domain::auth::{AccessToken, RefreshToken, TokenPair};
 use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::invoice::{
@@ -1728,4 +1731,49 @@ async fn application_access_invites_ignore_expired_and_block_double_terminal_sta
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn trusted_application_email_access_consumes_on_activation() {
+    let pool = isolated_pool().await;
+    let db = Db::new(pool);
+
+    let admin = make_user("admin@trusted-access.pl");
+    let admin_id = UserRepository::create(&db, &admin).await.unwrap();
+    let user = make_user("new.user@trusted-access.pl");
+    let user_id = UserRepository::create(&db, &user).await.unwrap();
+
+    let access = TrustedApplicationEmailAccess {
+        id: TrustedApplicationEmailAccessId::new(),
+        email: user.email.clone(),
+        consumed_at: None,
+        revoked_at: None,
+        created_by_user_id: admin_id,
+        created_at: Utc::now(),
+    };
+
+    ApplicationAccessRepository::create_trusted_email_access(&db, &access)
+        .await
+        .unwrap();
+    let pending = ApplicationAccessRepository::find_pending_trusted_email_access_by_email(
+        &db,
+        &user.email,
+    )
+    .await
+    .unwrap();
+    assert!(pending.is_some());
+
+    let summary =
+        ApplicationAccessRepository::activate_trusted_email_access(&db, &access.id, &user_id, &user.email)
+            .await
+            .unwrap();
+    assert_eq!(summary.workspace.created_by_user_id, user_id);
+
+    let pending = ApplicationAccessRepository::find_pending_trusted_email_access_by_email(
+        &db,
+        &user.email,
+    )
+    .await
+    .unwrap();
+    assert!(pending.is_none());
 }
