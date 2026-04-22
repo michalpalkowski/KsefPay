@@ -33,12 +33,23 @@
       <dd>{{ runtime_status }}</dd>
     </dl>
   </div>
+
+  <div class="card">
+    <h2>Model dostępu</h2>
+    <p class="page-copy">Ten certyfikat jest przechowywany per NIP. Zakładamy, że konto NIP do programu dodaje tylko właściciel lub upoważniony operator tego NIP.</p>
+    {% if can_manage_credentials %}
+    <p class="page-copy">Masz uprawnienie do zarządzania zapisanym certyfikatem i kluczem dla tego NIP.</p>
+    {% else %}
+    <p class="page-copy">To konto jest tylko do odczytu w zakresie certyfikatu. Nie możesz zapisać ani usunąć klucza prywatnego dla tego NIP.</p>
+    {% endif %}
+  </div>
 </div>
 
 <div class="page-card">
   <h2>Dodaj certyfikat i klucz</h2>
   <p class="page-copy">Możesz wybrać pliki PEM z dysku albo wkleić ich treść ręcznie. Klucz nie jest wyświetlany ponownie po zapisaniu.</p>
 
+  {% if can_manage_credentials %}
   <form method="post" action="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/certificate" class="form-stack" enctype="multipart/form-data">
     <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
 
@@ -67,9 +78,12 @@
       <a href="/accounts/{{ nip_prefix.as_deref().unwrap_or_default() }}/" class="btn btn-secondary">Powrót</a>
     </div>
   </form>
+  {% else %}
+  <div class="alert alert-error">Brak uprawnienia do zarządzania certyfikatem dla tego NIP.</div>
+  {% endif %}
 </div>
 
-{% if has_custom_certificate %}
+{% if has_custom_certificate && can_manage_credentials %}
 <div class="page-card">
   <h2>Usuń zapisany certyfikat</h2>
   <p class="page-copy">Po usunięciu aplikacja wróci do bieżącego trybu dla środowiska: w sandbox wygeneruje self-signed, a w production uwierzytelnianie bez certyfikatu przestanie działać.</p>

@@ -12,7 +12,9 @@ use tower_sessions::cookie::time::Duration as CookieDuration;
 use tracing_subscriber::EnvFilter;
 
 use ksef_core::infra::batch::zip_builder::BatchFileBuilder;
-use ksef_core::infra::crypto::{AesCbcEncryptor, OpenSslSignerFactory, OpenSslXadesSigner};
+use ksef_core::infra::crypto::{
+    AesCbcEncryptor, CertificateSecretBox, OpenSslSignerFactory, OpenSslXadesSigner,
+};
 use ksef_core::infra::fa3::{Fa3XmlConverter, Fa3XsdValidator};
 use ksef_core::infra::http::rate_limiter::TokenBucketRateLimiter;
 use ksef_core::infra::http::retry::RetryPolicy;
@@ -90,9 +92,23 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = config::Config::from_env().map_err(|e| anyhow::anyhow!(e))?;
+    let certificate_secret_box = match config.cert_storage_key.as_deref() {
+        Some(raw) => Arc::new(CertificateSecretBox::from_base64(raw).map_err(anyhow::Error::msg)?),
+        None if config.ksef_environment
+            == ksef_core::domain::environment::KSeFEnvironment::Production =>
+        {
+            anyhow::bail!("CERT_STORAGE_KEY must be set in production")
+        }
+        None => {
+            tracing::warn!(
+                "CERT_STORAGE_KEY not set; using insecure development key for certificate storage"
+            );
+            Arc::new(CertificateSecretBox::insecure_dev())
+        }
+    };
 
     tracing::info!(environment = %config.ksef_environment, "initializing database");
-    let db = db_backend::connect(&config.database_url).await?;
+    let db = db_backend::connect(&config.database_url, certificate_secret_box).await?;
     tracing::info!(backend = ?db.kind, "database backend ready");
 
     let ksef = Arc::new(KSeFApiClient::with_http_controls(

@@ -5,6 +5,7 @@ pub struct Config {
     pub server_host: String,
     pub server_port: u16,
     pub ksef_environment: KSeFEnvironment,
+    pub cert_storage_key: Option<String>,
     pub ksef_cert_pem: Option<String>,
     pub ksef_key_pem: Option<String>,
     /// Allowlist of emails permitted to register. Empty = registration closed.
@@ -29,6 +30,7 @@ impl Config {
 
         let ksef_cert_pem = std::env::var("KSEF_CERT_PEM").ok();
         let ksef_key_pem = std::env::var("KSEF_KEY_PEM").ok();
+        let cert_storage_key = std::env::var("CERT_STORAGE_KEY").ok();
 
         let allowed_emails = std::env::var("ALLOWED_EMAILS")
             .unwrap_or_default()
@@ -42,6 +44,7 @@ impl Config {
             server_host,
             server_port,
             ksef_environment,
+            cert_storage_key,
             ksef_cert_pem,
             ksef_key_pem,
             allowed_emails,

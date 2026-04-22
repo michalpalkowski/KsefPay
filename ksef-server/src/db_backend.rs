@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use ksef_core::infra::crypto::CertificateSecretBox;
 use ksef_core::infra::{pg, sqlite};
 use ksef_core::ports::audit_log::AuditLogRepository;
 use ksef_core::ports::company_cache::CompanyCacheRepository;
@@ -88,14 +89,22 @@ fn ensure_sqlite_parent_dir(database_url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn connect(database_url: &str) -> anyhow::Result<DatabasePorts> {
+pub async fn connect(
+    database_url: &str,
+    certificate_secret_box: Arc<CertificateSecretBox>,
+) -> anyhow::Result<DatabasePorts> {
     match detect_backend_kind(database_url)? {
-        DatabaseBackendKind::Postgres => connect_postgres(database_url).await,
-        DatabaseBackendKind::Sqlite => connect_sqlite(database_url).await,
+        DatabaseBackendKind::Postgres => {
+            connect_postgres(database_url, certificate_secret_box).await
+        }
+        DatabaseBackendKind::Sqlite => connect_sqlite(database_url, certificate_secret_box).await,
     }
 }
 
-async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
+async fn connect_postgres(
+    database_url: &str,
+    certificate_secret_box: Arc<CertificateSecretBox>,
+) -> anyhow::Result<DatabasePorts> {
     tracing::info!(backend = "postgres", "connecting to database");
     let pool = sqlx::PgPool::connect(database_url)
         .await
@@ -106,7 +115,10 @@ async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
         .await
         .with_context(|| "failed to run PostgreSQL migrations")?;
 
-    let db = Arc::new(pg::Db::new(pool));
+    let db = Arc::new(pg::Db::with_certificate_secret_box(
+        pool,
+        certificate_secret_box,
+    ));
 
     let invoice_repo: Arc<dyn InvoiceRepository> = db.clone();
     let job_queue: Arc<dyn JobQueue> = db.clone();
@@ -134,7 +146,10 @@ async fn connect_postgres(database_url: &str) -> anyhow::Result<DatabasePorts> {
     })
 }
 
-async fn connect_sqlite(database_url: &str) -> anyhow::Result<DatabasePorts> {
+async fn connect_sqlite(
+    database_url: &str,
+    certificate_secret_box: Arc<CertificateSecretBox>,
+) -> anyhow::Result<DatabasePorts> {
     ensure_sqlite_parent_dir(database_url)?;
 
     tracing::info!(backend = "sqlite", database_url, "connecting to database");
@@ -157,7 +172,10 @@ async fn connect_sqlite(database_url: &str) -> anyhow::Result<DatabasePorts> {
         .await
         .with_context(|| "failed to run SQLite migrations")?;
 
-    let db = Arc::new(sqlite::Db::new(pool));
+    let db = Arc::new(sqlite::Db::with_certificate_secret_box(
+        pool,
+        certificate_secret_box,
+    ));
 
     let invoice_repo: Arc<dyn InvoiceRepository> = db.clone();
     let job_queue: Arc<dyn JobQueue> = db.clone();

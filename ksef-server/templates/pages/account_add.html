@@ -11,6 +11,11 @@
     <p class="page-copy">Podaj NIP i nazwe firmy</p>
   </div>
 
+  <div class="card">
+    <h2>Ważne</h2>
+    <p class="page-copy">Certyfikat KSeF jest zapisywany per NIP, nie per użytkownik. Zakładamy, że tylko właściciel albo upoważniony operator danego NIP dodaje go do programu.</p>
+  </div>
+
   {% if let Some(msg) = error %}
   <div class="alert alert-error">{{ msg }}</div>
   {% endif %}
