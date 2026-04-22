@@ -234,8 +234,8 @@ pub async fn list(
 ) -> impl IntoResponse {
     let nip_str = nip_ctx.account.nip.to_string();
 
-    let filter = InvoiceFilter::for_account(nip_ctx.account.id.clone());
-    let invoices = match state.invoice_service.list(&filter).await {
+    let filter = InvoiceFilter::new();
+    let invoices = match state.invoice_service.list(&nip_ctx.scope, &filter).await {
         Ok(invoices) => invoices,
         Err(err) => {
             return (
@@ -388,7 +388,7 @@ pub async fn detail(
 
     match state
         .invoice_service
-        .find(&invoice_id, &nip_ctx.account.id)
+        .find(&invoice_id, &nip_ctx.scope)
         .await
     {
         Ok(invoice) => {
@@ -420,7 +420,6 @@ pub async fn create(
     let user_id = nip_ctx.user.id.clone();
     let user_email = nip_ctx.user.email.clone();
     let account_nip = nip_ctx.account.nip.clone();
-    let account_id = nip_ctx.account.id.clone();
     let nip_str = account_nip.to_string();
     let form_values = InvoiceFormValues::from(form.clone());
     let csrf_token = ensure_csrf_token(&session).await.unwrap_or_default();
@@ -472,7 +471,7 @@ pub async fn create(
 
     match state
         .invoice_service
-        .create_draft(input, account_id.clone())
+        .create_draft(input, &nip_ctx.scope)
         .await
     {
         Ok(invoice) => {
@@ -533,7 +532,7 @@ pub async fn submit(
 
     match state
         .invoice_service
-        .submit(&invoice_id, &nip_ctx.account.id)
+        .submit(&invoice_id, &nip_ctx.scope)
         .await
     {
         Ok(()) => {

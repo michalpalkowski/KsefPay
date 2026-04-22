@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tower_sessions::Session;
 
+use ksef_core::domain::account_scope::AccountScope;
 use ksef_core::domain::nip::Nip;
 use ksef_core::domain::nip_account::NipAccount;
 use ksef_core::domain::user::UserId;
@@ -79,7 +80,10 @@ impl FromRequestParts<AppState> for AuthUser {
 #[derive(Debug, Clone)]
 pub struct NipContext {
     pub user: AuthUser,
+    /// Account details for display (NIP string, display name, auth method, etc.).
     pub account: NipAccount,
+    /// Proof-of-authorization — pass this to per-account service and repository calls.
+    pub scope: AccountScope,
 }
 
 pub enum NipContextRejection {
@@ -128,14 +132,18 @@ impl FromRequestParts<AppState> for NipContext {
         let nip = Nip::parse(&nip_raw)
             .map_err(|e| NipContextRejection::BadRequest(format!("nieprawidłowy NIP: {e}")))?;
 
-        let account = state
+        let (account, scope) = state
             .nip_account_repo
-            .has_access(&user.id, &nip)
+            .verify_access(&user.id, &nip)
             .await
             .map_err(|e| NipContextRejection::InternalError(format!("błąd repozytorium: {e}")))?
             .ok_or(NipContextRejection::Forbidden)?;
 
-        Ok(Self { user, account })
+        Ok(Self {
+            user,
+            account,
+            scope,
+        })
     }
 }
 

@@ -81,7 +81,7 @@ pub async fn tokens_page(
 
     let tokens = match state
         .local_token_repo
-        .list_by_account_for_user(&nip_ctx.account.id, &user_id)
+        .list_by_account_for_user(&nip_ctx.scope, &user_id)
         .await
     {
         Ok(t) => t,
@@ -265,7 +265,7 @@ pub async fn revoke(
 
             if let Err(e) = state
                 .local_token_repo
-                .mark_revoked(&token_id, &nip_ctx.account.id)
+                .mark_revoked(&token_id, &nip_ctx.scope)
                 .await
             {
                 tracing::warn!(token_id = %token_id, "failed to mark local token revoked: {e}");

@@ -25,7 +25,7 @@ pub async fn dashboard(State(state): State<AppState>, nip_ctx: NipContext) -> Re
     let nip_str = nip_ctx.account.nip.to_string();
     let all = match state
         .invoice_service
-        .list(&InvoiceFilter::for_account(nip_ctx.account.id.clone()))
+        .list(&nip_ctx.scope, &InvoiceFilter::new())
         .await
     {
         Ok(invoices) => invoices,

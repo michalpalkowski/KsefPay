@@ -484,6 +484,7 @@ pub async fn fetch_execute(
 ) -> Response {
     let nip_str = nip_ctx.account.nip.to_string();
     let account_id = nip_ctx.account.id.clone();
+    let scope = nip_ctx.scope.clone();
     let account_nip = nip_ctx.account.nip.clone();
     let user_id = nip_ctx.user.id.clone();
     let user_email = nip_ctx.user.email;
@@ -549,6 +550,7 @@ pub async fn fetch_execute(
 
     let nip = nip_ctx.account.nip.clone();
     let fetch_service = state.fetch_service.clone();
+    let fetch_scope = scope;
     let audit_service = state.audit_service.clone();
     let fetch_jobs = state.fetch_jobs.clone();
     let job_key = account_id.clone();
@@ -573,7 +575,7 @@ pub async fn fetch_execute(
         };
 
         match fetch_service
-            .fetch_invoices_with_progress(&nip, &account_id, &query, on_progress)
+            .fetch_invoices_with_progress(&fetch_scope, &query, on_progress)
             .await
         {
             Ok(result) => {
@@ -684,9 +686,8 @@ pub async fn fetch_retry_invoice(
     _headers: HeaderMap,
     CsrfForm(form): CsrfForm<FetchSingleData>,
 ) -> Response {
-    let nip = nip_ctx.account.nip.clone();
-    let account_id = nip_ctx.account.id.clone();
-    let nip_str = nip.to_string();
+    let nip_str = nip_ctx.account.nip.to_string();
+    let scope = nip_ctx.scope.clone();
 
     let subject_type: SubjectType = match form.subject_type.parse() {
         Ok(st) => st,
@@ -702,7 +703,7 @@ pub async fn fetch_retry_invoice(
 
     match state
         .fetch_service
-        .retry_invoice(&nip, &account_id, &ksef_number, direction)
+        .retry_invoice(&scope, &ksef_number, direction)
         .await
     {
         Ok(_was_update) => {
