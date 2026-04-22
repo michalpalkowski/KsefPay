@@ -1,6 +1,7 @@
 use sqlx::SqliteExecutor;
 
 use super::datetime::parse_sqlite_datetime;
+use crate::domain::account_scope::AccountScope;
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::{KSeFAuthMethod, NipAccount, NipAccountId};
 use crate::domain::user::UserId;
@@ -245,11 +246,11 @@ pub async fn list_by_user<'e>(
     rows.into_iter().map(NipAccountRow::into_domain).collect()
 }
 
-pub async fn has_access<'e>(
+pub async fn verify_access<'e>(
     exec: impl SqliteExecutor<'e>,
     user_id: &UserId,
     nip: &Nip,
-) -> Result<Option<NipAccount>, RepositoryError> {
+) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
     let row: Option<NipAccountRow> = sqlx::query_as(
         r"SELECT na.* FROM nip_accounts na
            INNER JOIN user_nip_access una ON una.nip_account_id = na.id
@@ -260,5 +261,10 @@ pub async fn has_access<'e>(
     .fetch_optional(exec)
     .await?;
 
-    row.map(NipAccountRow::into_domain).transpose()
+    row.map(|r| {
+        let account = r.into_domain()?;
+        let scope = AccountScope::new(account.id.clone(), account.nip.clone());
+        Ok((account, scope))
+    })
+    .transpose()
 }

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::Mutex;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::audit::{AuditLogEntry, NewAuditLogEntry};
 use crate::domain::company::CompanyInfo;
 use crate::domain::environment::KSeFEnvironment;
@@ -119,33 +120,33 @@ impl InvoiceRepository for Db {
     async fn find_by_id(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Invoice, RepositoryError> {
-        queries::invoice::find_by_id(&self.pool, id, account_id).await
+        queries::invoice::find_by_id(&self.pool, id, scope).await
     }
     async fn update_status(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError> {
-        queries::invoice::update_status(&self.pool, id, account_id, status).await
+        queries::invoice::update_status(&self.pool, id, scope, status).await
     }
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &str,
     ) -> Result<(), RepositoryError> {
-        queries::invoice::set_ksef_number(&self.pool, id, account_id, ksef_number).await
+        queries::invoice::set_ksef_number(&self.pool, id, scope, ksef_number).await
     }
     async fn set_ksef_error(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         error: &str,
     ) -> Result<(), RepositoryError> {
-        queries::invoice::set_ksef_error(&self.pool, id, account_id, error).await
+        queries::invoice::set_ksef_error(&self.pool, id, scope, error).await
     }
     async fn find_by_ksef_number(
         &self,
@@ -156,15 +157,19 @@ impl InvoiceRepository for Db {
     async fn find_by_ksef_number_and_account(
         &self,
         ksef_number: &KSeFNumber,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Option<Invoice>, RepositoryError> {
-        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, account_id).await
+        queries::invoice::find_by_ksef_number_and_account(&self.pool, ksef_number, scope).await
     }
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         queries::invoice::upsert_by_ksef_number(&self.pool, invoice).await
     }
-    async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError> {
-        queries::invoice::list(&self.pool, filter).await
+    async fn list(
+        &self,
+        scope: &AccountScope,
+        filter: &InvoiceFilter,
+    ) -> Result<Vec<Invoice>, RepositoryError> {
+        queries::invoice::list(&self.pool, scope, filter).await
     }
 }
 
@@ -275,12 +280,12 @@ impl NipAccountRepository for Db {
     async fn list_by_user(&self, user_id: &UserId) -> Result<Vec<NipAccount>, RepositoryError> {
         queries::nip_account::list_by_user(&self.pool, user_id).await
     }
-    async fn has_access(
+    async fn verify_access(
         &self,
         user_id: &UserId,
         nip: &Nip,
-    ) -> Result<Option<NipAccount>, RepositoryError> {
-        queries::nip_account::has_access(&self.pool, user_id, nip).await
+    ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
+        queries::nip_account::verify_access(&self.pool, user_id, nip).await
     }
 }
 
@@ -329,25 +334,25 @@ impl LocalTokenRepository for Db {
 
     async fn list_by_account(
         &self,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Vec<LocalToken>, RepositoryError> {
-        queries::local_token::list_by_account(&self.pool, account_id).await
+        queries::local_token::list_by_account(&self.pool, scope).await
     }
 
     async fn list_by_account_for_user(
         &self,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         user_id: &UserId,
     ) -> Result<Vec<LocalToken>, RepositoryError> {
-        queries::local_token::list_by_account_for_user(&self.pool, account_id, user_id).await
+        queries::local_token::list_by_account_for_user(&self.pool, scope, user_id).await
     }
 
     async fn mark_revoked(
         &self,
         ksef_token_id: &str,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<(), RepositoryError> {
-        queries::local_token::mark_revoked(&self.pool, ksef_token_id, account_id).await
+        queries::local_token::mark_revoked(&self.pool, ksef_token_id, scope).await
     }
 }
 
@@ -394,41 +399,41 @@ impl InvoiceRepository for Tx {
     async fn find_by_id(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Invoice, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::find_by_id(&mut **tx, id, account_id).await
+        queries::invoice::find_by_id(&mut **tx, id, scope).await
     }
     async fn update_status(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::update_status(&mut **tx, id, account_id, status).await
+        queries::invoice::update_status(&mut **tx, id, scope, status).await
     }
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &str,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::set_ksef_number(&mut **tx, id, account_id, ksef_number).await
+        queries::invoice::set_ksef_number(&mut **tx, id, scope, ksef_number).await
     }
     async fn set_ksef_error(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         error: &str,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::set_ksef_error(&mut **tx, id, account_id, error).await
+        queries::invoice::set_ksef_error(&mut **tx, id, scope, error).await
     }
     async fn find_by_ksef_number(
         &self,
@@ -441,21 +446,25 @@ impl InvoiceRepository for Tx {
     async fn find_by_ksef_number_and_account(
         &self,
         ksef_number: &KSeFNumber,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Option<Invoice>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, account_id).await
+        queries::invoice::find_by_ksef_number_and_account(&mut **tx, ksef_number, scope).await
     }
     async fn upsert_by_ksef_number(&self, invoice: &Invoice) -> Result<InvoiceId, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
         queries::invoice::upsert_by_ksef_number(&mut **tx, invoice).await
     }
-    async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError> {
+    async fn list(
+        &self,
+        scope: &AccountScope,
+        filter: &InvoiceFilter,
+    ) -> Result<Vec<Invoice>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::invoice::list(&mut **tx, filter).await
+        queries::invoice::list(&mut **tx, scope, filter).await
     }
 }
 
@@ -627,14 +636,14 @@ impl NipAccountRepository for Tx {
         let tx = guard.as_mut().unwrap();
         queries::nip_account::list_by_user(&mut **tx, user_id).await
     }
-    async fn has_access(
+    async fn verify_access(
         &self,
         user_id: &UserId,
         nip: &Nip,
-    ) -> Result<Option<NipAccount>, RepositoryError> {
+    ) -> Result<Option<(NipAccount, AccountScope)>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::nip_account::has_access(&mut **tx, user_id, nip).await
+        queries::nip_account::verify_access(&mut **tx, user_id, nip).await
     }
 }
 
@@ -648,31 +657,31 @@ impl LocalTokenRepository for Tx {
 
     async fn list_by_account(
         &self,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Vec<LocalToken>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::local_token::list_by_account(&mut **tx, account_id).await
+        queries::local_token::list_by_account(&mut **tx, scope).await
     }
 
     async fn list_by_account_for_user(
         &self,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         user_id: &UserId,
     ) -> Result<Vec<LocalToken>, RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::local_token::list_by_account_for_user(&mut **tx, account_id, user_id).await
+        queries::local_token::list_by_account_for_user(&mut **tx, scope, user_id).await
     }
 
     async fn mark_revoked(
         &self,
         ksef_token_id: &str,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<(), RepositoryError> {
         let mut guard = self.conn().await;
         let tx = guard.as_mut().unwrap();
-        queries::local_token::mark_revoked(&mut **tx, ksef_token_id, account_id).await
+        queries::local_token::mark_revoked(&mut **tx, ksef_token_id, scope).await
     }
 }
 

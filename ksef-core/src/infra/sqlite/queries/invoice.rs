@@ -1,5 +1,6 @@
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteExecutor};
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{
     Address, CountryCode, Currency, Direction, Invoice, InvoiceId, InvoiceStatus, InvoiceType,
     LineItem, Money, Party, PaymentMethod,
@@ -244,12 +245,12 @@ pub async fn save<'e>(
 pub async fn find_by_id<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<Invoice, RepositoryError> {
     let row: InvoiceRow =
         sqlx::query_as("SELECT * FROM invoices WHERE id = ?1 AND nip_account_id = ?2")
             .bind(id.to_string())
-            .bind(account_id.to_string())
+            .bind(scope.id().to_string())
             .fetch_optional(exec)
             .await?
             .ok_or_else(|| RepositoryError::NotFound {
@@ -262,7 +263,7 @@ pub async fn find_by_id<'e>(
 pub async fn update_status<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     status: InvoiceStatus,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
@@ -270,7 +271,7 @@ pub async fn update_status<'e>(
     )
     .bind(status.to_string())
     .bind(id.to_string())
-    .bind(account_id.as_uuid().to_string())
+    .bind(scope.id().to_string())
     .execute(exec)
     .await?;
 
@@ -286,7 +287,7 @@ pub async fn update_status<'e>(
 pub async fn set_ksef_number<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     ksef_number: &str,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
@@ -294,7 +295,7 @@ pub async fn set_ksef_number<'e>(
     )
     .bind(ksef_number)
     .bind(id.to_string())
-    .bind(account_id.as_uuid().to_string())
+    .bind(scope.id().to_string())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {
@@ -309,7 +310,7 @@ pub async fn set_ksef_number<'e>(
 pub async fn set_ksef_error<'e>(
     exec: impl SqliteExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     error: &str,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
@@ -317,7 +318,7 @@ pub async fn set_ksef_error<'e>(
     )
     .bind(error)
     .bind(id.to_string())
-    .bind(account_id.as_uuid().to_string())
+    .bind(scope.id().to_string())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {
@@ -343,12 +344,12 @@ pub async fn find_by_ksef_number<'e>(
 pub async fn find_by_ksef_number_and_account<'e>(
     exec: impl SqliteExecutor<'e>,
     ksef_number: &KSeFNumber,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<Option<Invoice>, RepositoryError> {
     let row: Option<InvoiceRow> =
         sqlx::query_as("SELECT * FROM invoices WHERE ksef_number = ?1 AND nip_account_id = ?2")
             .bind(ksef_number.as_str())
-            .bind(account_id.as_uuid().to_string())
+            .bind(scope.id().to_string())
             .fetch_optional(exec)
             .await?;
     row.map(InvoiceRow::into_domain).transpose()
@@ -465,11 +466,12 @@ pub async fn upsert_by_ksef_number<'e>(
 
 pub async fn list<'e>(
     exec: impl SqliteExecutor<'e>,
+    scope: &AccountScope,
     filter: &InvoiceFilter,
 ) -> Result<Vec<Invoice>, RepositoryError> {
     let mut qb: QueryBuilder<'_, Sqlite> =
         QueryBuilder::new("SELECT * FROM invoices WHERE nip_account_id = ");
-    qb.push_bind(filter.account_id.to_string());
+    qb.push_bind(scope.id().to_string());
 
     if let Some(ref direction) = filter.direction {
         qb.push(" AND direction = ")

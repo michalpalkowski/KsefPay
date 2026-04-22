@@ -2,6 +2,7 @@ use std::fmt::Write;
 
 use sqlx::{PgExecutor, Row};
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{
     Address, CountryCode, Currency, Direction, Invoice, InvoiceId, InvoiceStatus, InvoiceType,
     LineItem, Money, Party, PaymentMethod,
@@ -215,12 +216,12 @@ pub async fn save<'e>(
 pub async fn find_by_id<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<Invoice, RepositoryError> {
     let row: InvoiceRow =
         sqlx::query_as("SELECT * FROM invoices WHERE id = $1 AND nip_account_id = $2")
             .bind(id.as_uuid())
-            .bind(account_id.as_uuid())
+            .bind(scope.id().as_uuid())
             .fetch_optional(exec)
             .await?
             .ok_or_else(|| RepositoryError::NotFound {
@@ -233,7 +234,7 @@ pub async fn find_by_id<'e>(
 pub async fn update_status<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     status: InvoiceStatus,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
@@ -241,7 +242,7 @@ pub async fn update_status<'e>(
     )
     .bind(status.to_string())
     .bind(id.as_uuid())
-    .bind(account_id.as_uuid())
+    .bind(scope.id().as_uuid())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {
@@ -256,7 +257,7 @@ pub async fn update_status<'e>(
 pub async fn set_ksef_number<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     ksef_number: &str,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
@@ -264,7 +265,7 @@ pub async fn set_ksef_number<'e>(
     )
     .bind(ksef_number)
     .bind(id.as_uuid())
-    .bind(account_id.as_uuid())
+    .bind(scope.id().as_uuid())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {
@@ -279,7 +280,7 @@ pub async fn set_ksef_number<'e>(
 pub async fn set_ksef_error<'e>(
     exec: impl PgExecutor<'e>,
     id: &InvoiceId,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     error: &str,
 ) -> Result<(), RepositoryError> {
     let result = sqlx::query(
@@ -287,7 +288,7 @@ pub async fn set_ksef_error<'e>(
     )
     .bind(error)
     .bind(id.as_uuid())
-    .bind(account_id.as_uuid())
+    .bind(scope.id().as_uuid())
     .execute(exec)
     .await?;
     if result.rows_affected() == 0 {
@@ -313,12 +314,12 @@ pub async fn find_by_ksef_number<'e>(
 pub async fn find_by_ksef_number_and_account<'e>(
     exec: impl PgExecutor<'e>,
     ksef_number: &KSeFNumber,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<Option<Invoice>, RepositoryError> {
     let row: Option<InvoiceRow> =
         sqlx::query_as("SELECT * FROM invoices WHERE ksef_number = $1 AND nip_account_id = $2")
             .bind(ksef_number.as_str())
-            .bind(account_id.as_uuid())
+            .bind(scope.id().as_uuid())
             .fetch_optional(exec)
             .await?;
     row.map(InvoiceRow::into_domain).transpose()
@@ -433,6 +434,7 @@ pub async fn upsert_by_ksef_number<'e>(
 
 pub async fn list<'e>(
     exec: impl PgExecutor<'e>,
+    scope: &AccountScope,
     filter: &InvoiceFilter,
 ) -> Result<Vec<Invoice>, RepositoryError> {
     let mut query = String::from("SELECT * FROM invoices WHERE nip_account_id = $1");
@@ -455,7 +457,7 @@ pub async fn list<'e>(
         write!(query, " OFFSET {offset}").unwrap();
     }
 
-    let mut q = sqlx::query_as::<_, InvoiceRow>(&query).bind(filter.account_id.as_uuid());
+    let mut q = sqlx::query_as::<_, InvoiceRow>(&query).bind(scope.id().as_uuid());
 
     if let Some(ref d) = filter.direction {
         q = q.bind(d.to_string());

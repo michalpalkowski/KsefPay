@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::SqliteExecutor;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::nip_account::NipAccountId;
 use crate::domain::permission::PermissionType;
 use crate::domain::token_mgmt::LocalToken;
@@ -98,12 +99,12 @@ pub async fn save<'e>(
 
 pub async fn list_by_account<'e>(
     exec: impl SqliteExecutor<'e>,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<Vec<LocalToken>, RepositoryError> {
     let rows: Vec<LocalTokenRow> = sqlx::query_as(
         "SELECT * FROM nip_account_tokens WHERE nip_account_id = ?1 ORDER BY datetime(created_at) DESC",
     )
-    .bind(account_id.to_string())
+    .bind(scope.id().to_string())
     .fetch_all(exec)
     .await?;
 
@@ -112,7 +113,7 @@ pub async fn list_by_account<'e>(
 
 pub async fn list_by_account_for_user<'e>(
     exec: impl SqliteExecutor<'e>,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     user_id: &UserId,
 ) -> Result<Vec<LocalToken>, RepositoryError> {
     let rows: Vec<LocalTokenRow> = sqlx::query_as(
@@ -121,7 +122,7 @@ pub async fn list_by_account_for_user<'e>(
           WHERE nip_account_id = ?1 AND user_id = ?2
           ORDER BY datetime(created_at) DESC",
     )
-    .bind(account_id.to_string())
+    .bind(scope.id().to_string())
     .bind(user_id.to_string())
     .fetch_all(exec)
     .await?;
@@ -132,13 +133,13 @@ pub async fn list_by_account_for_user<'e>(
 pub async fn mark_revoked<'e>(
     exec: impl SqliteExecutor<'e>,
     ksef_token_id: &str,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<(), RepositoryError> {
     sqlx::query(
         "UPDATE nip_account_tokens SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE ksef_token_id = ?1 AND nip_account_id = ?2",
     )
     .bind(ksef_token_id)
-    .bind(account_id.as_uuid().to_string())
+    .bind(scope.id().to_string())
     .execute(exec)
     .await
     .map_err(RepositoryError::Database)?;

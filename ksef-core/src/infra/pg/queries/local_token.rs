@@ -1,6 +1,7 @@
 use sqlx::PgExecutor;
 use sqlx::types::Json;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::nip_account::NipAccountId;
 use crate::domain::token_mgmt::LocalToken;
 use crate::domain::user::UserId;
@@ -60,7 +61,7 @@ pub async fn save<'e>(
 
 pub async fn list_by_account<'e>(
     exec: impl PgExecutor<'e>,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<Vec<LocalToken>, RepositoryError> {
     let rows: Vec<LocalTokenRow> = sqlx::query_as(
         r"SELECT id, nip_account_id, user_id, ksef_token_id, permissions, description, created_at, revoked_at
@@ -68,7 +69,7 @@ pub async fn list_by_account<'e>(
           WHERE nip_account_id = $1
           ORDER BY created_at DESC",
     )
-    .bind(account_id.as_uuid())
+    .bind(scope.id().as_uuid())
     .fetch_all(exec)
     .await
     .map_err(RepositoryError::Database)?;
@@ -78,7 +79,7 @@ pub async fn list_by_account<'e>(
 
 pub async fn list_by_account_for_user<'e>(
     exec: impl PgExecutor<'e>,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
     user_id: &UserId,
 ) -> Result<Vec<LocalToken>, RepositoryError> {
     let rows: Vec<LocalTokenRow> = sqlx::query_as(
@@ -87,7 +88,7 @@ pub async fn list_by_account_for_user<'e>(
           WHERE nip_account_id = $1 AND user_id = $2
           ORDER BY created_at DESC",
     )
-    .bind(account_id.as_uuid())
+    .bind(scope.id().as_uuid())
     .bind(user_id.as_uuid())
     .fetch_all(exec)
     .await
@@ -99,13 +100,13 @@ pub async fn list_by_account_for_user<'e>(
 pub async fn mark_revoked<'e>(
     exec: impl PgExecutor<'e>,
     ksef_token_id: &str,
-    account_id: &NipAccountId,
+    scope: &AccountScope,
 ) -> Result<(), RepositoryError> {
     sqlx::query(
         "UPDATE nip_account_tokens SET revoked_at = COALESCE(revoked_at, NOW()) WHERE ksef_token_id = $1 AND nip_account_id = $2",
     )
     .bind(ksef_token_id)
-    .bind(account_id.as_uuid())
+    .bind(scope.id().as_uuid())
     .execute(exec)
     .await
     .map_err(RepositoryError::Database)?;
