@@ -301,7 +301,7 @@ fn parse_invite_role(raw_role: &str) -> Result<WorkspaceRole, WorkspaceAccessErr
 
 fn invite_url(base_url: &str, raw_token: &str) -> String {
     format!(
-        "{}/register?invite={raw_token}",
+        "{}/register?workspace_invite={raw_token}",
         base_url.trim_end_matches('/')
     )
 }
@@ -984,7 +984,7 @@ mod tests {
         assert!(
             sent[0]
                 .invite_url
-                .starts_with("https://app.example.test/register?invite=")
+                .starts_with("https://app.example.test/register?workspace_invite=")
         );
 
         let _ = std::fs::remove_file(db_path);
