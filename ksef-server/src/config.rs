@@ -49,7 +49,7 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
         let application_access_mode = match std::env::var("APPLICATION_ACCESS_MODE")
-            .unwrap_or_else(|_| "email_invite".to_string())
+            .unwrap_or_else(|_| "trusted_email".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str()

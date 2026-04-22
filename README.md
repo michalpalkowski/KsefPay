@@ -71,7 +71,7 @@ Important values:
 - `DATABASE_URL=postgres://ksef:ksef@localhost:5432/ksef`
 - `APP_BASE_URL=http://localhost:3000`
 - `KSEF_ENVIRONMENT=test`
-- `APPLICATION_ACCESS_MODE=email_invite`
+- `APPLICATION_ACCESS_MODE=trusted_email`
 - `SMTP_HOST=127.0.0.1`
 - `SMTP_PORT=1025`
 - `SMTP_SECURITY=plaintext`
@@ -140,7 +140,7 @@ Effect:
 
 ### 4a. Application Access Mode
 
-Application access works in exactly one mode at a time.
+Application access works in exactly one mode at a time. Default mode is `trusted_email`.
 
 - `APPLICATION_ACCESS_MODE=email_invite`
   - bootstrap admins grant access by email invite
