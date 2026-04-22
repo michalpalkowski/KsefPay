@@ -1,11 +1,21 @@
 use chrono::NaiveDate;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{
     Address, CountryCode, Currency, Direction, Invoice, InvoiceId, InvoiceStatus, InvoiceType,
     LineItem, Money, Party, PaymentMethod, Quantity, VatRate,
 };
 use crate::domain::nip::Nip;
 use crate::domain::nip_account::NipAccountId;
+
+/// Build an [`AccountScope`] from raw parts for use in tests.
+///
+/// Only available inside `ksef-core` (including its integration tests) because
+/// it calls the `pub(crate)` constructor.
+#[must_use]
+pub fn make_scope(id: NipAccountId, nip: Nip) -> AccountScope {
+    AccountScope::new(id, nip)
+}
 
 /// Build a minimal valid invoice for testing.
 #[must_use]

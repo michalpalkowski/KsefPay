@@ -116,6 +116,7 @@ impl JobQueue for MockJobQueue {
     }
 }
 
+#[cfg(test)]
 fn make_job(job_type: &str) -> Job {
     Job {
         id: JobId::new(),

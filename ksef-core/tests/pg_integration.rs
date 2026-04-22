@@ -11,6 +11,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
+use ksef_core::domain::account_scope::AccountScope;
 use ksef_core::domain::auth::{AccessToken, RefreshToken, TokenPair};
 use ksef_core::domain::environment::KSeFEnvironment;
 use ksef_core::domain::invoice::{
@@ -29,6 +30,7 @@ use ksef_core::ports::job_queue::JobQueue;
 use ksef_core::ports::nip_account_repository::NipAccountRepository;
 use ksef_core::ports::session_repository::{SessionRepository, StoredSession, StoredTokenPair};
 use ksef_core::ports::user_repository::UserRepository;
+use ksef_core::test_support::fixtures::make_scope;
 
 // ---------------------------------------------------------------------------
 // Shared infrastructure: one container, isolated database per test
@@ -167,6 +169,18 @@ fn account_id_b() -> NipAccountId {
     NipAccountId::from_uuid(Uuid::from_u128(22))
 }
 
+fn test_scope() -> AccountScope {
+    make_scope(test_account_id(), test_nip())
+}
+
+fn scope_a() -> AccountScope {
+    make_scope(account_id_a(), Nip::parse("5260250274").unwrap())
+}
+
+fn scope_b() -> AccountScope {
+    make_scope(account_id_b(), Nip::parse("1060000062").unwrap())
+}
+
 async fn create_account_with_id(repo: &Db, id: NipAccountId, nip: Nip) {
     let mut account = make_nip_account(&nip);
     account.id = id;
@@ -239,7 +253,7 @@ async fn invoice_save_and_find_by_id() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_scope())
         .await
         .unwrap();
     assert_eq!(found.id.as_uuid(), invoice.id.as_uuid());
@@ -268,7 +282,7 @@ async fn invoice_save_and_find_by_id_mobile_payment_method() {
     invoice.payment_method = Some(PaymentMethod::Mobile);
     let id = repo.save(&invoice).await.unwrap();
 
-    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_scope())
         .await
         .unwrap();
     assert_eq!(found.payment_method, Some(PaymentMethod::Mobile));
@@ -281,7 +295,7 @@ async fn invoice_find_by_id_not_found() {
     create_account_with_id(&repo, test_account_id(), test_nip()).await;
 
     let missing_id = InvoiceId::new();
-    let err = InvoiceRepository::find_by_id(&repo, &missing_id, &test_account_id())
+    let err = InvoiceRepository::find_by_id(&repo, &missing_id, &test_scope())
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -308,11 +322,11 @@ async fn invoice_update_status_changes_status() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    repo.update_status(&id, &test_account_id(), InvoiceStatus::Queued)
+    repo.update_status(&id, &test_scope(), InvoiceStatus::Queued)
         .await
         .unwrap();
 
-    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_scope())
         .await
         .unwrap();
     assert_eq!(found.status, InvoiceStatus::Queued);
@@ -322,10 +336,10 @@ async fn invoice_update_status_changes_status() {
 async fn invoice_update_status_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let dummy_account = NipAccountId::new();
+    let dummy_scope = make_scope(NipAccountId::new(), test_nip());
 
     let err = repo
-        .update_status(&InvoiceId::new(), &dummy_account, InvoiceStatus::Queued)
+        .update_status(&InvoiceId::new(), &dummy_scope, InvoiceStatus::Queued)
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -340,11 +354,11 @@ async fn invoice_set_ksef_number_persists() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    repo.set_ksef_number(&id, &test_account_id(), "KSeF-12345")
+    repo.set_ksef_number(&id, &test_scope(), "KSeF-12345")
         .await
         .unwrap();
 
-    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_scope())
         .await
         .unwrap();
     assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-12345");
@@ -359,11 +373,11 @@ async fn invoice_set_ksef_error_persists() {
     let invoice = sample_invoice();
     let id = repo.save(&invoice).await.unwrap();
 
-    repo.set_ksef_error(&id, &test_account_id(), "submission timed out")
+    repo.set_ksef_error(&id, &test_scope(), "submission timed out")
         .await
         .unwrap();
 
-    let found = InvoiceRepository::find_by_id(&repo, &id, &test_account_id())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &test_scope())
         .await
         .unwrap();
     assert_eq!(found.ksef_error.as_deref(), Some("submission timed out"));
@@ -373,10 +387,10 @@ async fn invoice_set_ksef_error_persists() {
 async fn invoice_set_ksef_number_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let dummy_account = NipAccountId::new();
+    let dummy_scope = make_scope(NipAccountId::new(), test_nip());
 
     let err = repo
-        .set_ksef_number(&InvoiceId::new(), &dummy_account, "KSeF-999")
+        .set_ksef_number(&InvoiceId::new(), &dummy_scope, "KSeF-999")
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -386,10 +400,10 @@ async fn invoice_set_ksef_number_not_found() {
 async fn invoice_set_ksef_error_not_found() {
     let pool = isolated_pool().await;
     let repo = Db::new(pool);
-    let dummy_account = NipAccountId::new();
+    let dummy_scope = make_scope(NipAccountId::new(), test_nip());
 
     let err = repo
-        .set_ksef_error(&InvoiceId::new(), &dummy_account, "oops")
+        .set_ksef_error(&InvoiceId::new(), &dummy_scope, "oops")
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -409,8 +423,8 @@ async fn invoice_list_filters_by_direction() {
     incoming.direction = Direction::Incoming;
     repo.save(&incoming).await.unwrap();
 
-    let filter = InvoiceFilter::for_account(test_account_id()).with_direction(Direction::Outgoing);
-    let result = repo.list(&filter).await.unwrap();
+    let filter = InvoiceFilter::new().with_direction(Direction::Outgoing);
+    let result = repo.list(&test_scope(), &filter).await.unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].direction, Direction::Outgoing);
 }
@@ -423,15 +437,15 @@ async fn invoice_list_filters_by_status() {
 
     let inv1 = sample_invoice();
     let id1 = repo.save(&inv1).await.unwrap();
-    repo.update_status(&id1, InvoiceStatus::Queued)
+    repo.update_status(&id1, &test_scope(), InvoiceStatus::Queued)
         .await
         .unwrap();
 
     let inv2 = sample_invoice();
     repo.save(&inv2).await.unwrap(); // stays Draft
 
-    let filter = InvoiceFilter::for_account(test_account_id()).with_status(InvoiceStatus::Queued);
-    let result = repo.list(&filter).await.unwrap();
+    let filter = InvoiceFilter::new().with_status(InvoiceStatus::Queued);
+    let result = repo.list(&test_scope(), &filter).await.unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].id.as_uuid(), id1.as_uuid());
 }
@@ -446,10 +460,10 @@ async fn invoice_list_with_limit_and_offset() {
         repo.save(&sample_invoice()).await.unwrap();
     }
 
-    let mut filter = InvoiceFilter::for_account(test_account_id());
+    let mut filter = InvoiceFilter::new();
     filter.limit = Some(2);
     filter.offset = Some(1);
-    let result = repo.list(&filter).await.unwrap();
+    let result = repo.list(&test_scope(), &filter).await.unwrap();
     assert_eq!(result.len(), 2);
 }
 
@@ -460,7 +474,7 @@ async fn invoice_list_empty_returns_empty() {
     create_account_with_id(&repo, test_account_id(), test_nip()).await;
 
     let result = repo
-        .list(&InvoiceFilter::for_account(test_account_id()))
+        .list(&test_scope(), &InvoiceFilter::new())
         .await
         .unwrap();
     assert!(result.is_empty());
@@ -479,15 +493,17 @@ async fn invoice_list_filters_by_account_id() {
     invoice.nip_account_id = account_a.clone();
     repo.save(&invoice).await.unwrap();
 
+    let scope_a_local = make_scope(account_a, test_nip());
+    let scope_b_local = make_scope(account_b, other_nip());
     let result = repo
-        .list(&InvoiceFilter::for_account(account_a))
+        .list(&scope_a_local, &InvoiceFilter::new())
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
 
     // A different account id returns nothing
     let result_wrong = repo
-        .list(&InvoiceFilter::for_account(account_b))
+        .list(&scope_b_local, &InvoiceFilter::new())
         .await
         .unwrap();
     assert!(result_wrong.is_empty());
@@ -1135,7 +1151,7 @@ async fn access_has_access_returns_account_when_granted() {
     let acc_id = NipAccountRepository::create(&db, &acc).await.unwrap();
     db.grant_access(&user_id, &acc_id).await.unwrap();
 
-    let result = db.has_access(&user_id, &test_nip()).await.unwrap();
+    let result = db.verify_access(&user_id, &test_nip()).await.unwrap();
     assert!(result.is_some());
 }
 
@@ -1150,7 +1166,7 @@ async fn access_has_access_returns_none_when_not_granted() {
         .await
         .unwrap();
 
-    let result = db.has_access(&user_id, &test_nip()).await.unwrap();
+    let result = db.verify_access(&user_id, &test_nip()).await.unwrap();
     assert!(result.is_none());
 }
 
@@ -1166,14 +1182,14 @@ async fn access_revoke_removes_access() {
     db.grant_access(&user_id, &acc_id).await.unwrap();
 
     assert!(
-        db.has_access(&user_id, &test_nip())
+        db.verify_access(&user_id, &test_nip())
             .await
             .unwrap()
             .is_some()
     );
     db.revoke_access(&user_id, &acc_id).await.unwrap();
     assert!(
-        db.has_access(&user_id, &test_nip())
+        db.verify_access(&user_id, &test_nip())
             .await
             .unwrap()
             .is_none()
@@ -1195,12 +1211,17 @@ async fn access_isolation_between_users() {
     db.grant_access(&alice_id, &acc_id).await.unwrap();
 
     assert!(
-        db.has_access(&alice_id, &test_nip())
+        db.verify_access(&alice_id, &test_nip())
             .await
             .unwrap()
             .is_some()
     );
-    assert!(db.has_access(&bob_id, &test_nip()).await.unwrap().is_none());
+    assert!(
+        db.verify_access(&bob_id, &test_nip())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 // ===========================================================================
@@ -1223,15 +1244,15 @@ async fn update_status_wrong_account_returns_not_found() {
     inv.nip_account_id = account_id_a();
     let id = repo.save(&inv).await.unwrap();
 
-    // Try to update with account B's ID — must fail
+    // Try to update with account B's scope — must fail
     let err = repo
-        .update_status(&id, &account_id_b(), InvoiceStatus::Queued)
+        .update_status(&id, &scope_b(), InvoiceStatus::Queued)
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 
     // Invoice A is unchanged
-    let found = InvoiceRepository::find_by_id(&repo, &id, &account_id_a())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &scope_a())
         .await
         .unwrap();
     assert_eq!(found.status, InvoiceStatus::Draft);
@@ -1254,13 +1275,13 @@ async fn set_ksef_number_wrong_account_returns_not_found() {
     let id = repo.save(&inv).await.unwrap();
 
     let err = repo
-        .set_ksef_number(&id, &account_id_b(), "KSeF-EVIL-001")
+        .set_ksef_number(&id, &scope_b(), "KSeF-EVIL-001")
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 
     // ksef_number on account A's invoice is still None
-    let found = InvoiceRepository::find_by_id(&repo, &id, &account_id_a())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &scope_a())
         .await
         .unwrap();
     assert!(found.ksef_number.is_none());
@@ -1283,12 +1304,12 @@ async fn set_ksef_error_wrong_account_returns_not_found() {
     let id = repo.save(&inv).await.unwrap();
 
     let err = repo
-        .set_ksef_error(&id, &account_id_b(), "injected error")
+        .set_ksef_error(&id, &scope_b(), "injected error")
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 
-    let found = InvoiceRepository::find_by_id(&repo, &id, &account_id_a())
+    let found = InvoiceRepository::find_by_id(&repo, &id, &scope_a())
         .await
         .unwrap();
     assert!(found.ksef_error.is_none());
@@ -1310,7 +1331,7 @@ async fn find_by_id_wrong_account_returns_not_found() {
     inv.nip_account_id = account_id_a();
     let id = repo.save(&inv).await.unwrap();
 
-    let err = InvoiceRepository::find_by_id(&repo, &id, &account_id_b())
+    let err = InvoiceRepository::find_by_id(&repo, &id, &scope_b())
         .await
         .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));

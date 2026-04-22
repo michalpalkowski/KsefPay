@@ -2,8 +2,8 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
+use crate::domain::account_scope::AccountScope;
 use crate::domain::invoice::{Invoice, InvoiceId, InvoiceStatus};
-use crate::domain::nip_account::NipAccountId;
 use crate::domain::session::KSeFNumber;
 use crate::error::RepositoryError;
 use crate::ports::invoice_repository::{InvoiceFilter, InvoiceRepository};
@@ -53,12 +53,12 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn find_by_id(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Invoice, RepositoryError> {
         let store = self.invoices.lock().unwrap();
         store
             .iter()
-            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
+            .find(|i| i.id.as_uuid() == id.as_uuid() && i.nip_account_id == *scope.id())
             .cloned()
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
@@ -69,13 +69,13 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn update_status(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         status: InvoiceStatus,
     ) -> Result<(), RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let invoice = store
             .iter_mut()
-            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
+            .find(|i| i.id.as_uuid() == id.as_uuid() && i.nip_account_id == *scope.id())
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
                 id: id.to_string(),
@@ -87,13 +87,13 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn set_ksef_number(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         ksef_number: &str,
     ) -> Result<(), RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let invoice = store
             .iter_mut()
-            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
+            .find(|i| i.id.as_uuid() == id.as_uuid() && i.nip_account_id == *scope.id())
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
                 id: id.to_string(),
@@ -107,13 +107,13 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn set_ksef_error(
         &self,
         id: &InvoiceId,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
         error: &str,
     ) -> Result<(), RepositoryError> {
         let mut store = self.invoices.lock().unwrap();
         let invoice = store
             .iter_mut()
-            .find(|i| i.id.as_uuid() == id.as_uuid() && &i.nip_account_id == account_id)
+            .find(|i| i.id.as_uuid() == id.as_uuid() && i.nip_account_id == *scope.id())
             .ok_or_else(|| RepositoryError::NotFound {
                 entity: "Invoice",
                 id: id.to_string(),
@@ -140,7 +140,7 @@ impl InvoiceRepository for MockInvoiceRepo {
     async fn find_by_ksef_number_and_account(
         &self,
         ksef_number: &KSeFNumber,
-        account_id: &NipAccountId,
+        scope: &AccountScope,
     ) -> Result<Option<Invoice>, RepositoryError> {
         let store = self.invoices.lock().unwrap();
         Ok(store
@@ -149,7 +149,7 @@ impl InvoiceRepository for MockInvoiceRepo {
                 i.ksef_number
                     .as_ref()
                     .is_some_and(|n| n.as_str() == ksef_number.as_str())
-                    && &i.nip_account_id == account_id
+                    && i.nip_account_id == *scope.id()
             })
             .cloned())
     }
@@ -192,12 +192,16 @@ impl InvoiceRepository for MockInvoiceRepo {
         Ok(id)
     }
 
-    async fn list(&self, filter: &InvoiceFilter) -> Result<Vec<Invoice>, RepositoryError> {
+    async fn list(
+        &self,
+        scope: &AccountScope,
+        filter: &InvoiceFilter,
+    ) -> Result<Vec<Invoice>, RepositoryError> {
         let store = self.invoices.lock().unwrap();
         let mut result: Vec<Invoice> = store
             .iter()
             .filter(|inv| {
-                inv.nip_account_id == filter.account_id
+                inv.nip_account_id == *scope.id()
                     && filter.direction.map_or(true, |d| inv.direction == d)
                     && filter.status.map_or(true, |s| inv.status == s)
             })
@@ -219,10 +223,14 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    use crate::domain::nip::Nip;
+    use crate::domain::nip_account::NipAccountId;
     use crate::test_support::fixtures::sample_invoice;
 
-    fn test_account_id() -> NipAccountId {
-        NipAccountId::from_uuid(Uuid::from_u128(1))
+    fn test_scope() -> AccountScope {
+        let id = NipAccountId::from_uuid(Uuid::from_u128(1));
+        let nip = Nip::parse("5260250274").unwrap();
+        AccountScope::new(id, nip)
     }
 
     /// Contract test: save then find_by_id returns the same invoice.
@@ -230,9 +238,13 @@ mod tests {
     async fn save_and_find_by_id() {
         let repo = MockInvoiceRepo::new();
         let invoice = sample_invoice();
+        let scope = AccountScope::new(
+            invoice.nip_account_id.clone(),
+            Nip::parse("5260250274").unwrap(),
+        );
         let id = repo.save(&invoice).await.unwrap();
 
-        let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
+        let found = repo.find_by_id(&id, &scope).await.unwrap();
         assert_eq!(found.id.as_uuid(), invoice.id.as_uuid());
         assert_eq!(found.invoice_number, invoice.invoice_number);
     }
@@ -243,7 +255,7 @@ mod tests {
         let repo = MockInvoiceRepo::new();
         let missing_id = InvoiceId::new();
         let err = repo
-            .find_by_id(&missing_id, &test_account_id())
+            .find_by_id(&missing_id, &test_scope())
             .await
             .unwrap_err();
         assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -264,13 +276,17 @@ mod tests {
     async fn update_status_changes_status() {
         let repo = MockInvoiceRepo::new();
         let invoice = sample_invoice();
+        let scope = AccountScope::new(
+            invoice.nip_account_id.clone(),
+            Nip::parse("5260250274").unwrap(),
+        );
         let id = repo.save(&invoice).await.unwrap();
 
-        repo.update_status(&id, &invoice.nip_account_id, InvoiceStatus::Queued)
+        repo.update_status(&id, &scope, InvoiceStatus::Queued)
             .await
             .unwrap();
 
-        let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
+        let found = repo.find_by_id(&id, &scope).await.unwrap();
         assert_eq!(found.status, InvoiceStatus::Queued);
     }
 
@@ -278,9 +294,8 @@ mod tests {
     #[tokio::test]
     async fn update_status_not_found() {
         let repo = MockInvoiceRepo::new();
-        let dummy_account = NipAccountId::new();
         let err = repo
-            .update_status(&InvoiceId::new(), &dummy_account, InvoiceStatus::Queued)
+            .update_status(&InvoiceId::new(), &test_scope(), InvoiceStatus::Queued)
             .await
             .unwrap_err();
         assert!(matches!(err, RepositoryError::NotFound { .. }));
@@ -291,13 +306,17 @@ mod tests {
     async fn set_ksef_number_persists() {
         let repo = MockInvoiceRepo::new();
         let invoice = sample_invoice();
+        let scope = AccountScope::new(
+            invoice.nip_account_id.clone(),
+            Nip::parse("5260250274").unwrap(),
+        );
         let id = repo.save(&invoice).await.unwrap();
 
-        repo.set_ksef_number(&id, &invoice.nip_account_id, "KSeF-12345")
+        repo.set_ksef_number(&id, &scope, "KSeF-12345")
             .await
             .unwrap();
 
-        let found = repo.find_by_id(&id, &invoice.nip_account_id).await.unwrap();
+        let found = repo.find_by_id(&id, &scope).await.unwrap();
         assert_eq!(found.ksef_number.unwrap().as_str(), "KSeF-12345");
     }
 
@@ -314,9 +333,13 @@ mod tests {
         incoming.direction = crate::domain::invoice::Direction::Incoming;
         repo.save(&incoming).await.unwrap();
 
-        let filter = InvoiceFilter::for_account(outgoing.nip_account_id.clone())
-            .with_direction(crate::domain::invoice::Direction::Outgoing);
-        let result = repo.list(&filter).await.unwrap();
+        let scope = AccountScope::new(
+            outgoing.nip_account_id.clone(),
+            Nip::parse("5260250274").unwrap(),
+        );
+        let filter =
+            InvoiceFilter::new().with_direction(crate::domain::invoice::Direction::Outgoing);
+        let result = repo.list(&scope, &filter).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[0].direction,
@@ -333,10 +356,10 @@ mod tests {
             repo.save(&sample_invoice()).await.unwrap();
         }
 
-        let mut filter = InvoiceFilter::for_account(test_account_id());
+        let mut filter = InvoiceFilter::new();
         filter.limit = Some(2);
         filter.offset = Some(1);
-        let result = repo.list(&filter).await.unwrap();
+        let result = repo.list(&test_scope(), &filter).await.unwrap();
         assert_eq!(result.len(), 2);
     }
 
@@ -345,7 +368,7 @@ mod tests {
     async fn list_empty_returns_empty() {
         let repo = MockInvoiceRepo::new();
         let result = repo
-            .list(&InvoiceFilter::for_account(test_account_id()))
+            .list(&test_scope(), &InvoiceFilter::new())
             .await
             .unwrap();
         assert!(result.is_empty());
